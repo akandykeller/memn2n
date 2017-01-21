@@ -5,6 +5,9 @@ The implementation is based on http://arxiv.org/abs/1503.08895 [1]
 from __future__ import absolute_import
 from __future__ import division
 
+from tensorflow.python.ops import rnn_cell
+from tensorflow.python.ops import rnn
+
 import tensorflow as tf
 import numpy as np
 from six.moves import range
@@ -157,36 +160,90 @@ class MemN2N(object):
     def _build_vars(self):
         with tf.variable_scope(self._name):
             nil_word_slot = tf.zeros([1, self._embedding_size])
-            A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
-            B = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
-            self.A = tf.Variable(A, name="A")
-            self.B = tf.Variable(B, name="B")
-
-            self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
-
+            
             self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
             self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
+
+        with tf.variable_scope('query'):
+            B = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+            self.B = tf.Variable(B, name="B")
+
+            self.q_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+
+        with tf.variable_scope('mem_in', reuse=True):
+            A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+            self.A = tf.Variable(A, name="A")
+            self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
+
+            self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+
+        with tf.variable_scope('mem_out'):
+            C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+            self.C = tf.Variable(C, name="C")
+            self.TC = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC')
+
+            self.c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+
         self._nil_vars = set([self.A.name, self.B.name])
 
+
     def _inference(self, stories, queries):
-        with tf.variable_scope(self._name):
+        with tf.variable_scope('query'):
             q_emb = tf.nn.embedding_lookup(self.B, queries)
-            u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
+
+            q_emb_seq = tf.unpack(q_emb, axis=1)
+            outputs, states = rnn.rnn(self.q_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+
+            # USE LSTM Cell to generate u_0 instead of sum.
+            u_0 = tf.reduce_sum(states, 0)
+            #u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
+
             u = [u_0]
-            for _ in range(self._hops):
-                m_emb = tf.nn.embedding_lookup(self.A, stories)
-                m = tf.reduce_sum(m_emb * self._encoding, 2) + self.TA
-                # hack to get around no reduce_dot
-                u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
-                dotted = tf.reduce_sum(m * u_temp, 2)
 
-                # Calculate probabilities
-                probs = tf.nn.softmax(dotted)
+        for _ in range(self._hops):
+            m_emb_A = tf.nn.embedding_lookup(self.A, stories)
 
-                probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
-                c_temp = tf.transpose(m, [0, 2, 1])
+            # Use LSTM cell to generate m from m_emb
+            # Get rid of position encoding, potentially add time encoding still?
+
+            # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
+            # We need to feed into rnn individual sentence at a time
+            m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
+
+            m_states_all_sent = [] 
+
+            import ipdb
+            ipdb.set_trace()
+
+            for sentence in m_emb_A_sentences:
+                with tf.variable_scope('mem_in', reuse=None) as scope:
+                    scope.reuse_variables()
+                    m_emb_A_seq = tf.unpack(sentence, axis=1)
+                    outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                    m_states_all_sent.append(m_states)
+
+            m = tf.reduce_sum(m_states, 0)
+            # m = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA
+
+            # hack to get around no reduce_dot
+            u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
+            dotted = tf.reduce_sum(m * u_temp, 2)
+
+            # Calculate probabilities
+            probs = tf.nn.softmax(dotted)
+
+            probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
+                
+            with tf.variable_scope('mem_out'):
+                # Use LSTM cell to generate new m (aka c) from m_emb again?
+                m_emb_C = tf.nn.embedding_lookup(self.C, stories)
+                c = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC
+
+                c_temp = tf.transpose(c, [0, 2, 1])
+                # Take weighted sum of embedded memories
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
-
+            
+            with tf.variable_scope(self._name):
                 u_k = tf.matmul(u[-1], self.H) + o_k
                 # nonlinearity
                 if self._nonlin:
@@ -194,6 +251,7 @@ class MemN2N(object):
 
                 u.append(u_k)
 
+        with tf.variable_scope(self._name):
             return tf.matmul(u_k, self.W)
 
     def batch_fit(self, stories, queries, answers):
