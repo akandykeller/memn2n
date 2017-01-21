@@ -170,12 +170,10 @@ class MemN2N(object):
 
             self.q_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
 
-        with tf.variable_scope('mem_in', reuse=True):
+        with tf.variable_scope('mem_in'):
             A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
             self.A = tf.Variable(A, name="A")
             self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
-
-            self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
 
         with tf.variable_scope('mem_out'):
             C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
@@ -200,7 +198,7 @@ class MemN2N(object):
 
             u = [u_0]
 
-        for _ in range(self._hops):
+        for hopnum in range(self._hops):
             m_emb_A = tf.nn.embedding_lookup(self.A, stories)
 
             # Use LSTM cell to generate m from m_emb
@@ -215,14 +213,22 @@ class MemN2N(object):
             import ipdb
             ipdb.set_trace()
 
-            for sentence in m_emb_A_sentences:
-                with tf.variable_scope('mem_in', reuse=None) as scope:
-                    scope.reuse_variables()
+            for i, sentence in enumerate(m_emb_A_sentences):
+                reuse = None if (i == 0) else True
+                with tf.variable_scope('mem_in_{}'.format(hopnum), reuse=reuse) as scope:
+                    self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
                     m_emb_A_seq = tf.unpack(sentence, axis=1)
                     outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
                     m_states_all_sent.append(m_states)
 
-            m = tf.reduce_sum(m_states, 0)
+            import ipdb
+            ipdb.set_trace()
+
+            m_states_h = tf.pack([h for c, h in m_states_all_sent])
+            m_states_h_t = tf.transpose(m_states_h, [1, 0 ,2])
+
+            m = m_states_h_t + self.TA
+            #m = tf.reduce_sum(m_states_h, 0) + self.TA
             # m = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA
 
             # hack to get around no reduce_dot
