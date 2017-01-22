@@ -159,9 +159,13 @@ class MemN2N(object):
             nil_word_slot = tf.zeros([1, self._embedding_size])
             A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
             B = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+            C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+
             self.A = tf.Variable(A, name="A")
             self.B = tf.Variable(B, name="B")
+            self.C = tf.Variable(C, name="C")
 
+            self.TC = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC')
             self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
             self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
@@ -174,17 +178,21 @@ class MemN2N(object):
             u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
             u = [u_0]
             for _ in range(self._hops):
-                m_emb = tf.nn.embedding_lookup(self.A, stories)
-                m = tf.reduce_sum(m_emb * self._encoding, 2) + self.TA
+                m_emb_A = tf.nn.embedding_lookup(self.A, stories)
+                m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
-                dotted = tf.reduce_sum(m * u_temp, 2)
+                dotted = tf.reduce_sum(m_A * u_temp, 2)
 
                 # Calculate probabilities
                 probs = tf.nn.softmax(dotted)
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
-                c_temp = tf.transpose(m, [0, 2, 1])
+
+                m_emb_C = tf.nn.embedding_lookup(self.C, stories)
+                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC
+
+                c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
 
                 u_k = tf.matmul(u[-1], self.H) + o_k
