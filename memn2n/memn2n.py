@@ -175,6 +175,8 @@ class MemN2N(object):
             self.A = tf.Variable(A, name="A")
             self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
+            self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+
         with tf.variable_scope('mem_out'):
             C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
             self.C = tf.Variable(C, name="C")
@@ -199,41 +201,33 @@ class MemN2N(object):
             u = [u_0]
 
         for hopnum in range(self._hops):
-            m_emb_A = tf.nn.embedding_lookup(self.A, stories)
+            with tf.variable_scope('mem_in'):
+                m_emb_A = tf.nn.embedding_lookup(self.A, stories)
 
-            # Use LSTM cell to generate m from m_emb
-            # Get rid of position encoding, potentially add time encoding still?
+                # Use LSTM cell to generate m from m_emb
+                # Get rid of position encoding, potentially add time encoding still?
 
-            # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
-            # We need to feed into rnn individual sentence at a time
-            m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
+                # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
+                # We need to feed into rnn individual sentence at a time
+                m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
 
-            m_states_all_sent = [] 
+                m_A_states_all_sent = [] 
 
-            import ipdb
-            ipdb.set_trace()
+                for i, sentence in enumerate(m_emb_A_sentences):
+                    reuse = None if (i == 0) else True
+                    with tf.variable_scope('mem_in_{}'.format(hopnum), reuse=reuse) as scope:
+                        m_emb_A_seq = tf.unpack(sentence, axis=1)
+                        outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                        m_A_states_all_sent.append(m_states)
 
-            for i, sentence in enumerate(m_emb_A_sentences):
-                reuse = None if (i == 0) else True
-                with tf.variable_scope('mem_in_{}'.format(hopnum), reuse=reuse) as scope:
-                    self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
-                    m_emb_A_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
-                    m_states_all_sent.append(m_states)
+                m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
+                m_A_states_h_t = tf.transpose(m_A_states_h, [1, 0 ,2])
 
-            import ipdb
-            ipdb.set_trace()
-
-            m_states_h = tf.pack([h for c, h in m_states_all_sent])
-            m_states_h_t = tf.transpose(m_states_h, [1, 0 ,2])
-
-            m = m_states_h_t + self.TA
-            #m = tf.reduce_sum(m_states_h, 0) + self.TA
-            # m = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA
+                m_A = m_A_states_h_t + self.TA
 
             # hack to get around no reduce_dot
             u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
-            dotted = tf.reduce_sum(m * u_temp, 2)
+            dotted = tf.reduce_sum(m_A * u_temp, 2)
 
             # Calculate probabilities
             probs = tf.nn.softmax(dotted)
@@ -243,11 +237,27 @@ class MemN2N(object):
             with tf.variable_scope('mem_out'):
                 # Use LSTM cell to generate new m (aka c) from m_emb again?
                 m_emb_C = tf.nn.embedding_lookup(self.C, stories)
-                c = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC
 
-                c_temp = tf.transpose(c, [0, 2, 1])
+                m_emb_C_sentences = tf.unpack(m_emb_C, axis=1)
+
+                m_C_states_all_sent = [] 
+
+                for i, sentence in enumerate(m_emb_C_sentences):
+                    reuse = None if (i == 0) else True
+                    with tf.variable_scope('mem_out_{}'.format(hopnum), reuse=reuse) as scope:
+                        m_emb_C_seq = tf.unpack(sentence, axis=1)
+                        outputs, m_states = rnn.rnn(self.c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                        m_C_states_all_sent.append(m_states)
+
+                m_C_states_h = tf.pack([h for c, h in m_C_states_all_sent])
+                m_C_states_h_t = tf.transpose(m_C_states_h, [1, 0 ,2])
+
+                m_C = m_C_states_h_t + self.TC
+
+                m_C_t = tf.transpose(m_C, [0, 2, 1])
+
                 # Take weighted sum of embedded memories
-                o_k = tf.reduce_sum(c_temp * probs_temp, 2)
+                o_k = tf.reduce_sum(m_C_t * probs_temp, 2)
             
             with tf.variable_scope(self._name):
                 u_k = tf.matmul(u[-1], self.H) + o_k
