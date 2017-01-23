@@ -158,28 +158,44 @@ class MemN2N(object):
         with tf.variable_scope(self._name):
             nil_word_slot = tf.zeros([1, self._embedding_size])
             A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
-            B = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
             C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
 
-            self.A = tf.Variable(A, name="A")
-            self.B = tf.Variable(B, name="B")
-            self.C = tf.Variable(C, name="C")
+            self.A_1 = tf.Variable(A, name="A")
+            self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
-            self.TC = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC')
-            self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
+            self.C = []
+            self.TC = []
 
-            self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
-            self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
-        self._nil_vars = set([self.A.name, self.B.name])
+            for hopn in range(self._hops):
+                with tf.variable_scope('hop_{}'.format(hopn)):
+                    self.C.append(tf.Variable(C, name="C"))
+                    self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC'))
+
+            # Dont use projection for layerwise weight sharing
+            # self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
+            
+            # Use final C as replacement for W
+            # self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
+        
+        self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
     def _inference(self, stories, queries):
         with tf.variable_scope(self._name):
-            q_emb = tf.nn.embedding_lookup(self.B, queries)
+            # Use A_1 for thee question embedding as per Adjacent Weight Sharing
+            q_emb = tf.nn.embedding_lookup(self.A_1, queries)
             u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
             u = [u_0]
-            for _ in range(self._hops):
-                m_emb_A = tf.nn.embedding_lookup(self.A, stories)
-                m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA
+
+            for hopn in range(self._hops):
+                if hopn == 0:
+                    m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
+                    m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA_1
+
+                else:
+                    with tf.variable_scope('hop_{}'.format(hopn - 1)):
+                        m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
+                        m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TC[hopn - 1]
+
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
                 dotted = tf.reduce_sum(m_A * u_temp, 2)
@@ -189,20 +205,26 @@ class MemN2N(object):
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
 
-                m_emb_C = tf.nn.embedding_lookup(self.C, stories)
-                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC
+                m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
+                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC[hopn]
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
 
-                u_k = tf.matmul(u[-1], self.H) + o_k
+                # Dont use projection layer for adj weight sharing
+                # u_k = tf.matmul(u[-1], self.H) + o_k
+
+                u_k = u[-1] + o_k
+
                 # nonlinearity
                 if self._nonlin:
                     u_k = nonlin(u_k)
 
                 u.append(u_k)
 
-            return tf.matmul(u_k, self.W)
+            # Use last C for output (transposed)
+            with tf.variable_scope('hop_{}'.format(self._hops)):
+                return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
     def batch_fit(self, stories, queries, answers):
         """Runs the training algorithm over the passed batch
