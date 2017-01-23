@@ -12,8 +12,8 @@ from six.moves import range, reduce
 import tensorflow as tf
 import numpy as np
 
-tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
-tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
+tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
+tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
@@ -71,22 +71,30 @@ val_labels = np.argmax(valA, axis=1)
 
 tf.set_random_seed(FLAGS.random_state)
 batch_size = FLAGS.batch_size
-optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
+
+# optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
 
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
 
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
     for t in range(1, FLAGS.epochs+1):
+        # Stepped learning rate
+        if t - 1 <= 100:
+            anneal = 2.0 ** ((t - 1) // FLAGS.anneal_rate)
+        else:
+            anneal = 2.0 ** (100 // FLAGS.anneal_rate)
+        lr = FLAGS.learning_rate / anneal
+
         np.random.shuffle(batches)
         total_cost = 0.0
         for start, end in batches:
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
-            cost_t = model.batch_fit(s, q, a)
+            cost_t = model.batch_fit(s, q, a, lr)
             total_cost += cost_t
 
         if t % FLAGS.evaluation_interval == 0:

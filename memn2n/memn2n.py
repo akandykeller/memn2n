@@ -57,7 +57,6 @@ class MemN2N(object):
         max_grad_norm=40.0,
         nonlin=None,
         initializer=tf.random_normal_initializer(stddev=0.1),
-        optimizer=tf.train.AdamOptimizer(learning_rate=1e-2),
         encoding=position_encoding,
         session=tf.Session(),
         name='MemN2N'):
@@ -105,11 +104,13 @@ class MemN2N(object):
         self._max_grad_norm = max_grad_norm
         self._nonlin = nonlin
         self._init = initializer
-        self._opt = optimizer
         self._name = name
 
         self._build_inputs()
         self._build_vars()
+
+        self._opt = tf.train.GradientDescentOptimizer(learning_rate=self._lr)
+
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
@@ -153,6 +154,7 @@ class MemN2N(object):
         self._stories = tf.placeholder(tf.int32, [None, self._memory_size, self._sentence_size], name="stories")
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
+        self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -226,7 +228,7 @@ class MemN2N(object):
             with tf.variable_scope('hop_{}'.format(self._hops)):
                 return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, queries, answers):
+    def batch_fit(self, stories, queries, answers, learning_rate):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -237,7 +239,7 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers}
+        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
 
