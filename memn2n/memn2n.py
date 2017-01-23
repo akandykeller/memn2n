@@ -170,7 +170,7 @@ class MemN2N(object):
 
             self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
             self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
-        self._nil_vars = set([self.A.name, self.B.name])
+        self._nil_vars = set([self.A.name, self.B.name, self.C.name])
 
     def _inference(self, stories, queries):
         with tf.variable_scope(self._name):
