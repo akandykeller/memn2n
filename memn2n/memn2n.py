@@ -59,6 +59,7 @@ class MemN2N(object):
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
+        use_proj=False,
         initializer=tf.random_normal_initializer(stddev=0.1),
         optimizer=tf.train.AdamOptimizer(learning_rate=1e-2),
         encoding=position_encoding,
@@ -110,6 +111,7 @@ class MemN2N(object):
         self._init = initializer
         self._opt = optimizer
         self._name = name
+        self._use_proj = use_proj
 
         self._build_inputs()
         self._build_vars()
@@ -161,7 +163,9 @@ class MemN2N(object):
         with tf.variable_scope(self._name):
             nil_word_slot = tf.zeros([1, self._embedding_size])
             
-            self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
+            if self.use_proj:
+                self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
+            
             self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
 
         with tf.variable_scope('query'):
