@@ -163,71 +163,81 @@ class MemN2N(object):
         with tf.variable_scope(self._name):
             nil_word_slot = tf.zeros([1, self._embedding_size])
             
-            if self.use_proj:
+            if self._use_proj:
                 self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
             
-            self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
+            nil_word_slot = tf.zeros([1, self._embedding_size])
+            A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+            C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
+
+            self.A_1 = tf.Variable(A, name="A")
+            self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
+
+            self.C = []
+            self.TC = []
+
+        for hopnum in range(self._hops):
+            with tf.variable_scope('hop_{}'.format(hopnum)):
+                self.C.append(tf.Variable(C, name="C_{}".format(hopnum)))
+                self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC_{}'.format(hopnum)))
 
         with tf.variable_scope('query'):
-            B = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
-            self.B = tf.Variable(B, name="B")
-
             self.q_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
 
         with tf.variable_scope('mem_in'):
-            A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
-            self.A = tf.Variable(A, name="A")
-            self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
-
             self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
 
         with tf.variable_scope('mem_out'):
-            C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
-            self.C = tf.Variable(C, name="C")
-            self.TC = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC')
-
             self.c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
 
-        self._nil_vars = set([self.A.name, self.B.name])
+        self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
 
     def _inference(self, stories, queries):
-        with tf.variable_scope('query'):
-            q_emb = tf.nn.embedding_lookup(self.B, queries)
-
+        with tf.variable_scope(self._name):
+            q_emb = tf.nn.embedding_lookup(self.A_1, queries)
             q_emb_seq = tf.unpack(q_emb, axis=1)
+
+        with tf.variable_scope('query'):
             outputs, states = rnn.rnn(self.q_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
 
-            # USE LSTM Cell to generate u_0 instead of sum.
-            u_0 = tf.reduce_sum(states, 0)
-            #u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
+        # USE LSTM Cell to generate u_0 instead of sum.
+        u_0 = tf.reduce_sum(states, 0)
+        #u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
 
-            u = [u_0]
+        u = [u_0]
 
-        for hopnum in range(self._hops):
-            with tf.variable_scope('mem_in'):
-                m_emb_A = tf.nn.embedding_lookup(self.A, stories)
+        for hopn in range(self._hops):
+            if hopn == 0:
+                with tf.variable_scope(self._name):
+                    m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
+            else:
+                with tf.variable_scope('hop_{}'.format(hopn - 1)):
+                    m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
+                
+            # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
+            # We need to feed into rnn individual sentence at a time
+            m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
 
-                # Use LSTM cell to generate m from m_emb
-                # Get rid of position encoding, potentially add time encoding still?
+            m_A_states_all_sent = [] 
 
-                # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
-                # We need to feed into rnn individual sentence at a time
-                m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
+            for i, sentence in enumerate(m_emb_A_sentences):
+                reuse = None if (i == 0) else True
+                # For every hop, use a new set of rnn weights, but reuse accross a story
+                with tf.variable_scope('mem_in_{}'.format(hopn), reuse=reuse) as scope:
+                    m_emb_A_seq = tf.unpack(sentence, axis=1)
+                    outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                    m_A_states_all_sent.append(m_states)
 
-                m_A_states_all_sent = [] 
+            m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
+            m_A_states_h_t = tf.transpose(m_A_states_h, [1, 0 ,2])
 
-                for i, sentence in enumerate(m_emb_A_sentences):
-                    reuse = None if (i == 0) else True
-                    with tf.variable_scope('mem_in_{}'.format(hopnum), reuse=reuse) as scope:
-                        m_emb_A_seq = tf.unpack(sentence, axis=1)
-                        outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
-                        m_A_states_all_sent.append(m_states)
-
-                m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
-                m_A_states_h_t = tf.transpose(m_A_states_h, [1, 0 ,2])
-
-                m_A = m_A_states_h_t + self.TA
+            if hopn == 0:
+                with tf.variable_scope(self._name):
+                    m_A = m_A_states_h_t + self.TA_1
+            else:
+                with tf.variable_scope('hop_{}'.format(hopn - 1)):
+                    m_A = m_A_states_h_t + self.TC[hopn - 1]
 
             # hack to get around no reduce_dot
             u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
@@ -238,41 +248,47 @@ class MemN2N(object):
 
             probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
                 
-            with tf.variable_scope('mem_out'):
+            with tf.variable_scope('hop_{}'.format(hopn)):
                 # Use LSTM cell to generate new m (aka c) from m_emb again?
-                m_emb_C = tf.nn.embedding_lookup(self.C, stories)
+                m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
 
-                m_emb_C_sentences = tf.unpack(m_emb_C, axis=1)
+            m_emb_C_sentences = tf.unpack(m_emb_C, axis=1)
 
-                m_C_states_all_sent = [] 
+            m_C_states_all_sent = [] 
 
-                for i, sentence in enumerate(m_emb_C_sentences):
-                    reuse = None if (i == 0) else True
-                    with tf.variable_scope('mem_out_{}'.format(hopnum), reuse=reuse) as scope:
-                        m_emb_C_seq = tf.unpack(sentence, axis=1)
-                        outputs, m_states = rnn.rnn(self.c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
-                        m_C_states_all_sent.append(m_states)
+            for i, sentence in enumerate(m_emb_C_sentences):
+                reuse = None if (i == 0) else True
+                # Again use a different RNN for each out memory hop... too many rnns
+                with tf.variable_scope('mem_out_{}'.format(hopn), reuse=reuse) as scope:
+                    m_emb_C_seq = tf.unpack(sentence, axis=1)
+                    outputs, m_states = rnn.rnn(self.c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                    m_C_states_all_sent.append(m_states)
 
-                m_C_states_h = tf.pack([h for c, h in m_C_states_all_sent])
-                m_C_states_h_t = tf.transpose(m_C_states_h, [1, 0 ,2])
+            m_C_states_h = tf.pack([h for c, h in m_C_states_all_sent])
+            m_C_states_h_t = tf.transpose(m_C_states_h, [1, 0 ,2])
+           
+            with tf.variable_scope('hop_{}'.format(hopn)):
+                m_C = m_C_states_h_t + self.TC[hopn]
 
-                m_C = m_C_states_h_t + self.TC
+            m_C_t = tf.transpose(m_C, [0, 2, 1])
 
-                m_C_t = tf.transpose(m_C, [0, 2, 1])
-
-                # Take weighted sum of embedded memories
-                o_k = tf.reduce_sum(m_C_t * probs_temp, 2)
+            # Take weighted sum of embedded memories
+            o_k = tf.reduce_sum(m_C_t * probs_temp, 2)
             
             with tf.variable_scope(self._name):
-                u_k = tf.matmul(u[-1], self.H) + o_k
+                if self._use_proj:
+                    u_k = tf.matmul(u[-1], self.H) + o_k
+                else:
+                    u_k = u[-1] + o_k
+
                 # nonlinearity
                 if self._nonlin:
                     u_k = nonlin(u_k)
 
                 u.append(u_k)
 
-        with tf.variable_scope(self._name):
-            return tf.matmul(u_k, self.W)
+        with tf.variable_scope('hop_{}'.format(self._hops)):
+            return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
     def batch_fit(self, stories, queries, answers):
         """Runs the training algorithm over the passed batch
