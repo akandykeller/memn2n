@@ -198,14 +198,19 @@ class MemN2N(object):
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
             q_emb_seq = tf.unpack(q_emb, axis=1)
 
-        with tf.variable_scope('query'):
-            outputs, states = rnn.rnn(self.q_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+        rnn_A_scopes = ['RNN_A_1', 'RNN_C_1', 'RNN_C_2']
+        rnn_C_scopes = ['RNN_C_1', 'RNN_C_2', 'RNN_C_3']
+        
+
+        # Let B = A_1
+        with tf.variable_scope(rnn_A_scopes[0], reuse=None):
+            outputs, states = rnn.rnn(self.m_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
 
         # USE LSTM Cell to generate u_0 instead of sum.
-        u_0 = tf.reduce_sum(states, 0)
-        #u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
+        # u_0 = tf.reduce_sum(states, 0)
+        # u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
 
-        u = [u_0]
+        u = [states[-1]]
 
         for hopn in range(self._hops):
             if hopn == 0:
@@ -222,11 +227,14 @@ class MemN2N(object):
             m_A_states_all_sent = [] 
 
             for i, sentence in enumerate(m_emb_A_sentences):
-                reuse = None if (i == 0) else True
-                # For every hop, use a new set of rnn weights, but reuse accross a story
-                with tf.variable_scope('mem_in_{}'.format(hopn), reuse=reuse) as scope:
+                # reuse = None if (i == 0) else True
+
+                # if hopn == 0:
+                reuse = True
+ 
+                with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
                     m_emb_A_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                    outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)  #, initial_state=self._initial_state)
                     m_A_states_all_sent.append(m_states)
 
             m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
@@ -241,12 +249,16 @@ class MemN2N(object):
 
             # hack to get around no reduce_dot
             u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
-            dotted = tf.reduce_sum(m_A * u_temp, 2)
 
+            #m_A_t = tf.transpose(m_A, [1, 2, 0])
+            #u_t = tf.transpose(u[-1][0], [1, 0])
+
+            dotted = tf.reduce_sum(m_A * u_temp, 2)
+            
             # Calculate probabilities
             probs = tf.nn.softmax(dotted)
 
-            probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
+            #probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1, 3])
                 
             with tf.variable_scope('hop_{}'.format(hopn)):
                 # Use LSTM cell to generate new m (aka c) from m_emb again?
@@ -259,12 +271,13 @@ class MemN2N(object):
             for i, sentence in enumerate(m_emb_C_sentences):
                 reuse = None if (i == 0) else True
                 # Again use a different RNN for each out memory hop... too many rnns
-                with tf.variable_scope('mem_out_{}'.format(hopn), reuse=reuse) as scope:
+                with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
                     m_emb_C_seq = tf.unpack(sentence, axis=1)
+                    
                     outputs, m_states = rnn.rnn(self.c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
-                    m_C_states_all_sent.append(m_states)
+                    m_C_states_all_sent.append(m_states[-1])
 
-            m_C_states_h = tf.pack([h for c, h in m_C_states_all_sent])
+            m_C_states_h = tf.pack(m_C_states_all_sent)
             m_C_states_h_t = tf.transpose(m_C_states_h, [1, 0 ,2])
            
             with tf.variable_scope('hop_{}'.format(hopn)):
@@ -273,7 +286,7 @@ class MemN2N(object):
             m_C_t = tf.transpose(m_C, [0, 2, 1])
 
             # Take weighted sum of embedded memories
-            o_k = tf.reduce_sum(m_C_t * probs_temp, 2)
+            o_k = tf.reduce_sum(m_C_t * tf.expand_dims(probs, 1), 2)
             
             with tf.variable_scope(self._name):
                 if self._use_proj:
