@@ -181,14 +181,14 @@ class MemN2N(object):
                 self.C.append(tf.Variable(C, name="C_{}".format(hopnum)))
                 self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC_{}'.format(hopnum)))
 
-        with tf.variable_scope('query'):
-            self.q_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+        # with tf.variable_scope('query'):
+        #     self.q_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
 
-        with tf.variable_scope('mem_in'):
-            self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+        # with tf.variable_scope('mem_in'):
+        #     self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
 
-        with tf.variable_scope('mem_out'):
-            self.c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=0.0)
+        # with tf.variable_scope('mem_out'):
+        #     self.c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
 
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
@@ -204,11 +204,8 @@ class MemN2N(object):
 
         # Let B = A_1
         with tf.variable_scope(rnn_A_scopes[0], reuse=None):
-            outputs, states = rnn.rnn(self.m_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
-
-        # USE LSTM Cell to generate u_0 instead of sum.
-        # u_0 = tf.reduce_sum(states, 0)
-        # u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
+            m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
+            outputs, states = rnn.rnn(m_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
 
         u = [states[-1]]
 
@@ -226,15 +223,18 @@ class MemN2N(object):
 
             m_A_states_all_sent = [] 
 
-            for i, sentence in enumerate(m_emb_A_sentences):
-                # reuse = None if (i == 0) else True
+            m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
+            m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
-                # if hopn == 0:
+            for i, sentence in enumerate(m_emb_A_sentences):
                 reuse = True
- 
                 with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
+                    if i == 0:
+                        init_state = m_init_state
+                    else:
+                        init_state = m_states
                     m_emb_A_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(self.m_cell, m_emb_A_seq, dtype=tf.float32)  #, initial_state=self._initial_state)
+                    outputs, m_states = rnn.rnn(m_cell, m_emb_A_seq, initial_state=init_state)
                     m_A_states_all_sent.append(m_states)
 
             m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
@@ -250,15 +250,10 @@ class MemN2N(object):
             # hack to get around no reduce_dot
             u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
 
-            #m_A_t = tf.transpose(m_A, [1, 2, 0])
-            #u_t = tf.transpose(u[-1][0], [1, 0])
-
             dotted = tf.reduce_sum(m_A * u_temp, 2)
             
             # Calculate probabilities
             probs = tf.nn.softmax(dotted)
-
-            #probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1, 3])
                 
             with tf.variable_scope('hop_{}'.format(hopn)):
                 # Use LSTM cell to generate new m (aka c) from m_emb again?
@@ -272,9 +267,10 @@ class MemN2N(object):
                 reuse = None if (i == 0) else True
                 # Again use a different RNN for each out memory hop... too many rnns
                 with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
+                    c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
                     m_emb_C_seq = tf.unpack(sentence, axis=1)
                     
-                    outputs, m_states = rnn.rnn(self.c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                    outputs, m_states = rnn.rnn(c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
                     m_C_states_all_sent.append(m_states[-1])
 
             m_C_states_h = tf.pack(m_C_states_all_sent)

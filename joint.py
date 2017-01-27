@@ -12,6 +12,8 @@ from six.moves import range, reduce
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import tqdm
+import copy
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
@@ -109,7 +111,7 @@ with tf.Session() as sess:
     for i in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
-        for start, end in batches:
+        for start, end in tqdm(batches, desc="Epoch {}: ".format(i)):
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
@@ -118,7 +120,7 @@ with tf.Session() as sess:
 
         if i % FLAGS.evaluation_interval == 0:
             train_accs = []
-            for start in range(0, n_train, n_train/20):
+            for start in tqdm(range(0, n_train, n_train/20), desc='Train Eval: '):
                 end = start + n_train/20
                 s = trainS[start:end]
                 q = trainQ[start:end]
@@ -127,7 +129,7 @@ with tf.Session() as sess:
                 train_accs.append(acc)
 
             val_accs = []
-            for start in range(0, n_val, n_val/20):
+            for start in tqdm(range(0, n_val, n_val/20), desc='Val Eval: '):
                 end = start + n_val/20
                 s = valS[start:end]
                 q = valQ[start:end]
@@ -136,7 +138,7 @@ with tf.Session() as sess:
                 val_accs.append(acc)
 
             test_accs = []
-            for start in range(0, n_test, n_test/20):
+            for start in tqdm(range(0, n_test, n_test/20), desc='Test Eval: '):
                 end = start + n_test/20
                 s = testS[start:end]
                 q = testQ[start:end]

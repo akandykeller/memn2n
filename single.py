@@ -11,6 +11,8 @@ from six.moves import range, reduce
 
 import tensorflow as tf
 import numpy as np
+from tqdm import tqdm
+import copy
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
@@ -75,6 +77,8 @@ optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FL
 
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
+# Get list of ordered batches for eval before shuffling
+train_eval_batches = copy.copy(batches)
 
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
@@ -82,25 +86,26 @@ with tf.Session() as sess:
     for t in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
-        for start, end in batches:
+        for start, end in tqdm(batches, desc='Epoch {}: '.format(t)):
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
+
             cost_t = model.batch_fit(s, q, a)
             total_cost += cost_t
 
         if t % FLAGS.evaluation_interval == 0:
             train_preds = []
-            for start in range(0, n_train, batch_size):
-                end = start + batch_size
+            #for start in range(0, n_train, batch_size):
+            for start, end in tqdm(train_eval_batches, desc='Train Eval: '):
                 s = trainS[start:end]
                 q = trainQ[start:end]
                 pred = model.predict(s, q)
                 train_preds += list(pred)
 
             val_preds = model.predict(valS, valQ)
-            train_acc = metrics.accuracy_score(np.array(train_preds), train_labels)
-            val_acc = metrics.accuracy_score(val_preds, val_labels)
+            train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
+            val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
 
             print('-----------------------')
             print('Epoch', t)
@@ -110,5 +115,5 @@ with tf.Session() as sess:
             print('-----------------------')
 
     test_preds = model.predict(testS, testQ)
-    test_acc = metrics.accuracy_score(test_preds, test_labels)
+    test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
