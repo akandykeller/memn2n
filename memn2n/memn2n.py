@@ -310,7 +310,7 @@ class MemN2N(object):
 
                 # nonlinearity
                 if self._nonlin:
-                    u_k = nonlin(u_k)
+                    u_k = self._nonlin(u_k)
 
                 u.append(u_k)
 
