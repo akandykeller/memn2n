@@ -220,9 +220,39 @@ class MemN2N(object):
             # Use A_1 for thee question embedding as per Adjacent Weight Sharing
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
 
-            # Embed Q with conv A too... 
-            u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
-            u = [u_0]
+            pooled_outputs = []
+
+            # Apply conv accross all filter sizes and collect outputs
+            for i, filter_size in enumerate(self.filter_sizes):
+                with tf.variable_scope("A1_conv_{}".format(filter_size)):
+                    conv = tf.nn.conv2d(
+                        tf.expand_dims(q_emb, -1),
+                        self.A_conv_W[i],
+                        strides=[1, 1, 1, 1],
+                        padding="VALID",
+                        name="conv")
+                    # Apply nonlinearity
+                    h = tf.nn.relu(tf.nn.bias_add(conv, self.A_conv_b[i]), name="relu")
+                    # Maxpooling over the outputs
+                    pooled = tf.nn.max_pool(
+                        h,
+                        ksize=[1, self._sentence_size - filter_size + 1, 1, 1],
+                        strides=[1, 1, 1, 1],
+                        padding='VALID',
+                        name="pool")
+
+                    pooled_outputs.append(pooled)
+
+            import ipdb
+            ipdb.set_trace()
+
+            num_filters_total = self._num_filters * len(self.filter_sizes)
+            h_pool = tf.concat(3, pooled_outputs)
+            h_pool_flat = tf.expand_dims(tf.reshape(h_pool, [-1, num_filters_total]), 1)
+
+            q_A_proj = tf.batch_matmul(h_pool_flat, self.W_A_proj)
+
+            u = [q_A_proj[:, 0]]
 
             for hopn in range(self._hops):
                 if hopn == 0:
