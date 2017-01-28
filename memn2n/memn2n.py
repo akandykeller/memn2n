@@ -56,6 +56,7 @@ class MemN2N(object):
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
+        num_filters=2,
         initializer=tf.random_normal_initializer(stddev=0.1),
         encoding=position_encoding,
         session=tf.Session(),
@@ -103,8 +104,11 @@ class MemN2N(object):
         self._hops = hops
         self._max_grad_norm = max_grad_norm
         self._nonlin = nonlin
+        self._num_filters = num_filters
         self._init = initializer
         self._name = name
+
+        self.filter_sizes = [2, 3, 4]
 
         self._build_inputs()
         self._build_vars()
@@ -157,7 +161,10 @@ class MemN2N(object):
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
 
     def _build_vars(self):
+        # Use conv-filters of 2, 3, and 4 words
+
         with tf.variable_scope(self._name):
+            num_filters_total = self._num_filters * len(self.filter_sizes)
             nil_word_slot = tf.zeros([1, self._embedding_size])
             A = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
             C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
@@ -165,13 +172,40 @@ class MemN2N(object):
             self.A_1 = tf.Variable(A, name="A")
             self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
+            self.A_conv_W = []
+            self.A_conv_b = []
+
+            for i, filter_size in enumerate(self.filter_sizes):
+                with tf.variable_scope("A1_conv_{}".format(filter_size)):
+                    filter_shape = [filter_size, self._embedding_size, 1, self._num_filters]
+                    self.A_conv_W.append(tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W"))
+                    self.A_conv_b.append(tf.Variable(tf.constant(0.1, shape=[self._num_filters]), name="b"))
+
+            self.W_A_proj = tf.tile(tf.Variable(self._init([1, num_filters_total, self._embedding_size]), name="W_A_proj"), [tf.shape(self._stories)[0], 1, 1])
+
             self.C = []
             self.TC = []
+
+            self.C_conv_W = []
+            self.C_conv_b = []
+
+            self.W_C_proj = []
 
             for hopn in range(self._hops):
                 with tf.variable_scope('hop_{}'.format(hopn)):
                     self.C.append(tf.Variable(C, name="C"))
                     self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC'))
+
+                    self.C_conv_W.append([])
+                    self.C_conv_b.append([])
+
+                    for i, filter_size in enumerate(self.filter_sizes):
+                        with tf.variable_scope("C_conv_{}".format(filter_size)):
+                            filter_shape = [filter_size, self._embedding_size, 1, self._num_filters]
+                            self.C_conv_W[hopn].append(tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W"))
+                            self.C_conv_b[hopn].append(tf.Variable(tf.constant(0.1, shape=[self._num_filters]), name="b"))
+                    
+                    self.W_C_proj.append(tf.tile(tf.Variable(self._init([1, num_filters_total, self._embedding_size]), name="W_C_proj"), [tf.shape(self._stories)[0], 1, 1]))
 
             # Dont use projection for layerwise weight sharing
             # self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
@@ -185,18 +219,94 @@ class MemN2N(object):
         with tf.variable_scope(self._name):
             # Use A_1 for thee question embedding as per Adjacent Weight Sharing
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
+
+            # Embed Q with conv A too... 
             u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
             u = [u_0]
 
             for hopn in range(self._hops):
                 if hopn == 0:
                     m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
-                    m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA_1
+                    m_emb_A_seq = tf.unpack(m_emb_A, axis=1)
+
+                    all_h_pooled = []
+                    for sentence in m_emb_A_seq:
+                        pooled_outputs = []
+
+                        # Apply conv accross all filter sizes and collect outputs
+                        for i, filter_size in enumerate(self.filter_sizes):
+                            with tf.variable_scope("A1_conv_{}".format(filter_size)):
+                                conv = tf.nn.conv2d(
+                                    tf.expand_dims(sentence, -1),
+                                    self.A_conv_W[i],
+                                    strides=[1, 1, 1, 1],
+                                    padding="VALID",
+                                    name="conv")
+                                # Apply nonlinearity
+                                h = tf.nn.relu(tf.nn.bias_add(conv, self.A_conv_b[i]), name="relu")
+                                # Maxpooling over the outputs
+                                pooled = tf.nn.max_pool(
+                                    h,
+                                    ksize=[1, self._sentence_size - filter_size + 1, 1, 1],
+                                    strides=[1, 1, 1, 1],
+                                    padding='VALID',
+                                    name="pool")
+
+                                pooled_outputs.append(pooled)
+                        
+                        num_filters_total = self._num_filters * len(self.filter_sizes)
+                        h_pool = tf.concat(3, pooled_outputs)
+                        h_pool_flat = tf.reshape(h_pool, [-1, num_filters_total])
+
+                        all_h_pooled.append(h_pool_flat)
+
+                    m_A = tf.pack(all_h_pooled, axis=1)
+
+                    m_A_proj = tf.batch_matmul(m_A, self.W_A_proj)
+
+                    m_A = m_A_proj + self.TA_1
 
                 else:
                     with tf.variable_scope('hop_{}'.format(hopn - 1)):
                         m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
-                        m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TC[hopn - 1]
+
+                        m_emb_A_seq = tf.unpack(m_emb_A, axis=1)
+
+                        all_h_pooled = []
+                        for sentence in m_emb_A_seq:
+                            pooled_outputs = []
+
+                            # Apply conv accross all filter sizes and collect outputs
+                            for i, filter_size in enumerate(self.filter_sizes):
+                                with tf.variable_scope("C_conv_{}".format(filter_size)):
+                                    conv = tf.nn.conv2d(
+                                        tf.expand_dims(sentence, -1),
+                                        self.C_conv_W[hopn - 1][i],
+                                        strides=[1, 1, 1, 1],
+                                        padding="VALID",
+                                        name="conv")
+                                    # Apply nonlinearity
+                                    h = tf.nn.relu(tf.nn.bias_add(conv, self.C_conv_b[hopn - 1][i]), name="relu")
+                                    # Maxpooling over the outputs
+                                    pooled = tf.nn.max_pool(
+                                        h,
+                                        ksize=[1, self._sentence_size - filter_size + 1, 1, 1],
+                                        strides=[1, 1, 1, 1],
+                                        padding='VALID',
+                                        name="pool")
+
+                                    pooled_outputs.append(pooled)
+                            
+                            num_filters_total = self._num_filters * len(self.filter_sizes)
+                            h_pool = tf.concat(3, pooled_outputs)
+                            h_pool_flat = tf.reshape(h_pool, [-1, num_filters_total])
+
+                            all_h_pooled.append(h_pool_flat)
+
+                        m_A = tf.pack(all_h_pooled, axis=1)
+
+                        m_A_proj = tf.batch_matmul(m_A, self.W_C_proj[hopn - 1]) 
+                        m_A = m_A_proj + self.TC[hopn - 1]
 
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
@@ -208,7 +318,43 @@ class MemN2N(object):
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
 
                 m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
-                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC[hopn]
+                m_emb_C_seq = tf.unpack(m_emb_C, axis=1)
+
+                with tf.variable_scope('hop_{}'.format(hopn)):
+                    all_h_pooled = []
+                    for sentence in m_emb_C_seq:
+                        pooled_outputs = []
+
+                        # Apply conv accross all filter sizes and collect outputs
+                        for i, filter_size in enumerate(self.filter_sizes):
+                            with tf.variable_scope("C_conv_{}".format(filter_size)):
+                                conv = tf.nn.conv2d(
+                                    tf.expand_dims(sentence, -1),
+                                    self.C_conv_W[hopn][i],
+                                    strides=[1, 1, 1, 1],
+                                    padding="VALID",
+                                    name="conv")
+                                # Apply nonlinearity
+                                h = tf.nn.relu(tf.nn.bias_add(conv, self.C_conv_b[hopn][i]), name="relu")
+                                # Maxpooling over the outputs
+                                pooled = tf.nn.max_pool(
+                                    h,
+                                    ksize=[1, self._sentence_size - filter_size + 1, 1, 1],
+                                    strides=[1, 1, 1, 1],
+                                    padding='VALID',
+                                    name="pool")
+
+                                pooled_outputs.append(pooled)
+                        
+                        num_filters_total = self._num_filters * len(self.filter_sizes)
+                        h_pool = tf.concat(3, pooled_outputs)
+                        h_pool_flat = tf.reshape(h_pool, [-1, num_filters_total])
+
+                        all_h_pooled.append(h_pool_flat)
+
+                    m_C_pooled = tf.pack(all_h_pooled, axis=1)
+                    m_C_proj = tf.batch_matmul(m_C_pooled, self.W_C_proj[hopn]) 
+                    m_C = m_C_proj + self.TC[hopn]
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)

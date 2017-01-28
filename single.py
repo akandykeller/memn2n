@@ -11,6 +11,7 @@ from six.moves import range, reduce
 
 import tensorflow as tf
 import numpy as np
+import copy
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
@@ -76,6 +77,7 @@ batch_size = FLAGS.batch_size
 
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
+train_batches = copy.copy(batches)
 
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
@@ -99,7 +101,7 @@ with tf.Session() as sess:
 
         if t % FLAGS.evaluation_interval == 0:
             train_preds = []
-            for start in range(0, n_train, batch_size):
+            for start, end in train_batches:
                 end = start + batch_size
                 s = trainS[start:end]
                 q = trainQ[start:end]
@@ -107,7 +109,7 @@ with tf.Session() as sess:
                 train_preds += list(pred)
 
             val_preds = model.predict(valS, valQ)
-            train_acc = metrics.accuracy_score(np.array(train_preds), train_labels)
+            train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
             val_acc = metrics.accuracy_score(val_preds, val_labels)
 
             print('-----------------------')
