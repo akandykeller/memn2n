@@ -60,6 +60,8 @@ class MemN2N(object):
         max_grad_norm=40.0,
         nonlin=None,
         use_proj=False,
+        rnn_input_keep_prob=0.8,
+        rnn_output_keep_prob=1.0,
         initializer=tf.random_normal_initializer(stddev=0.1),
         optimizer=tf.train.AdamOptimizer(learning_rate=1e-2),
         encoding=position_encoding,
@@ -108,6 +110,8 @@ class MemN2N(object):
         self._hops = hops
         self._max_grad_norm = max_grad_norm
         self._nonlin = nonlin
+        self._rnn_input_keep_prob = rnn_input_keep_prob
+        self._rnn_output_keep_prob = rnn_output_keep_prob
         self._init = initializer
         self._opt = optimizer
         self._name = name
@@ -181,15 +185,6 @@ class MemN2N(object):
                 self.C.append(tf.Variable(C, name="C_{}".format(hopnum)))
                 self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC_{}'.format(hopnum)))
 
-        # with tf.variable_scope('query'):
-        #     self.q_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
-
-        # with tf.variable_scope('mem_in'):
-        #     self.m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
-
-        # with tf.variable_scope('mem_out'):
-        #     self.c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
-
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
 
@@ -203,8 +198,16 @@ class MemN2N(object):
         
         # Let B = A_1
         with tf.variable_scope(rnn_A_scopes[0], reuse=None):
-            m_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
-            outputs, q_states = rnn.rnn(m_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+            q_cell = rnn_cell.LSTMCell(self._embedding_size, 
+                                       forget_bias=1.0, 
+                                       use_peepholes=True)
+            # Add dropout
+            q_cell = rnn_cell.DropoutWrapper(q_cell,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+            q_init_state = q_cell.zero_state(tf.shape(stories)[0], tf.float32)
+
+            outputs, q_states = rnn.rnn(q_cell, q_emb_seq, initial_state=q_init_state)
 
         u = [q_states[-1]]
 
@@ -224,6 +227,10 @@ class MemN2N(object):
 
             m_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
             m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
+
+            m_cell = rnn_cell.DropoutWrapper(m_cell,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
 
             for i, sentence in enumerate(m_emb_A_sentences):
                 reuse = True
@@ -267,9 +274,12 @@ class MemN2N(object):
             c_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
             c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
+            c_cell = rnn_cell.DropoutWrapper(c_cell,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
             for i, sentence in enumerate(m_emb_C_sentences):
                 reuse = None if (i == 0) else True
-
                 if i == 0:
                     init_state = c_init_state
                 else:
