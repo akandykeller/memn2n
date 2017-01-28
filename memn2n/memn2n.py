@@ -201,13 +201,12 @@ class MemN2N(object):
         rnn_A_scopes = ['RNN_A_1', 'RNN_C_1', 'RNN_C_2']
         rnn_C_scopes = ['RNN_C_1', 'RNN_C_2', 'RNN_C_3']
         
-
         # Let B = A_1
         with tf.variable_scope(rnn_A_scopes[0], reuse=None):
-            m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
-            outputs, states = rnn.rnn(m_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+            m_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
+            outputs, q_states = rnn.rnn(m_cell, q_emb_seq, dtype=tf.float32)#, initial_state=self._initial_state)
 
-        u = [states[-1]]
+        u = [q_states[-1]]
 
         for hopn in range(self._hops):
             if hopn == 0:
@@ -223,13 +222,15 @@ class MemN2N(object):
 
             m_A_states_all_sent = [] 
 
-            m_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
+            m_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
             m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
             for i, sentence in enumerate(m_emb_A_sentences):
                 reuse = True
                 with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
-                    if i == 0:
+                    if i == 0 and hopn == 0:
+                        init_state = q_states
+                    elif i == 0:
                         init_state = m_init_state
                     else:
                         init_state = m_states
@@ -262,15 +263,22 @@ class MemN2N(object):
             m_emb_C_sentences = tf.unpack(m_emb_C, axis=1)
 
             m_C_states_all_sent = [] 
+            
+            c_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
+            c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
             for i, sentence in enumerate(m_emb_C_sentences):
                 reuse = None if (i == 0) else True
+
+                if i == 0:
+                    init_state = c_init_state
+                else:
+                    init_state = m_states
+
                 # Again use a different RNN for each out memory hop... too many rnns
                 with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
-                    c_cell = rnn_cell.BasicLSTMCell(self._embedding_size, forget_bias=1.0)
                     m_emb_C_seq = tf.unpack(sentence, axis=1)
-                    
-                    outputs, m_states = rnn.rnn(c_cell, m_emb_C_seq, dtype=tf.float32)#, initial_state=self._initial_state)
+                    outputs, m_states = rnn.rnn(c_cell, m_emb_C_seq, initial_state=init_state)
                     m_C_states_all_sent.append(m_states[-1])
 
             m_C_states_h = tf.pack(m_C_states_all_sent)
