@@ -56,7 +56,7 @@ class MemN2N(object):
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
-        num_filters=2,
+        num_filters=5,
         initializer=tf.random_normal_initializer(stddev=0.1),
         encoding=position_encoding,
         session=tf.Session(),
@@ -108,7 +108,7 @@ class MemN2N(object):
         self._init = initializer
         self._name = name
 
-        self.filter_sizes = [2, 3, 4]
+        self.filter_sizes = [1, 3, 5, 7] 
 
         self._build_inputs()
         self._build_vars()
@@ -181,7 +181,8 @@ class MemN2N(object):
                     self.A_conv_W.append(tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W"))
                     self.A_conv_b.append(tf.Variable(tf.constant(0.1, shape=[self._num_filters]), name="b"))
 
-            self.W_A_proj = tf.tile(tf.Variable(self._init([1, num_filters_total, self._embedding_size]), name="W_A_proj"), [tf.shape(self._stories)[0], 1, 1])
+            # self.W_A_proj = tf.tile(tf.Variable(self.ones([1, num_filters_total, self._embedding_size]), name="W_A_proj"), [tf.shape(self._stories)[0], 1, 1])
+            self.W_A_proj = tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_A_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1])
 
             self.C = []
             self.TC = []
@@ -205,7 +206,8 @@ class MemN2N(object):
                             self.C_conv_W[hopn].append(tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W"))
                             self.C_conv_b[hopn].append(tf.Variable(tf.constant(0.1, shape=[self._num_filters]), name="b"))
                     
-                    self.W_C_proj.append(tf.tile(tf.Variable(self._init([1, num_filters_total, self._embedding_size]), name="W_C_proj"), [tf.shape(self._stories)[0], 1, 1]))
+                    # self.W_C_proj.append(tf.tile(tf.Variable(self._init([1, num_filters_total, self._embedding_size]), name="W_C_proj"), [tf.shape(self._stories)[0], 1, 1]))
+                    self.W_C_proj.append(tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_C_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1]))
 
             # Dont use projection for layerwise weight sharing
             # self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
@@ -218,7 +220,7 @@ class MemN2N(object):
     def _inference(self, stories, queries):
         with tf.variable_scope(self._name):
             # Use A_1 for thee question embedding as per Adjacent Weight Sharing
-            q_emb = tf.nn.embedding_lookup(self.A_1, queries)
+            q_emb = tf.nn.embedding_lookup(self.A_1, queries) * self._encoding
 
             pooled_outputs = []
 
@@ -226,13 +228,21 @@ class MemN2N(object):
             for i, filter_size in enumerate(self.filter_sizes):
                 with tf.variable_scope("A1_conv_{}".format(filter_size)):
                     conv = tf.nn.conv2d(
-                        tf.expand_dims(q_emb, -1),
-                        self.A_conv_W[i],
-                        strides=[1, 1, 1, 1],
-                        padding="VALID",
-                        name="conv")
+                                        tf.expand_dims(q_emb, -1),
+                                        self.A_conv_W[i],
+                                        strides=[1, 1, 1, 1],
+                                        padding="VALID",
+                                        name="conv")
                     # Apply nonlinearity
                     h = tf.nn.relu(tf.nn.bias_add(conv, self.A_conv_b[i]), name="relu")
+                    # h = tf.nn.bias_add(conv, self.A_conv_b[i])
+                    
+
+                    import ipdb
+                    ipdb.set_trace()
+                    
+                    # Try just summing inputs? / Try less filters on easier tasks
+
                     # Maxpooling over the outputs
                     pooled = tf.nn.max_pool(
                         h,
@@ -242,9 +252,6 @@ class MemN2N(object):
                         name="pool")
 
                     pooled_outputs.append(pooled)
-
-            import ipdb
-            ipdb.set_trace()
 
             num_filters_total = self._num_filters * len(self.filter_sizes)
             h_pool = tf.concat(3, pooled_outputs)
@@ -256,7 +263,7 @@ class MemN2N(object):
 
             for hopn in range(self._hops):
                 if hopn == 0:
-                    m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
+                    m_emb_A = tf.nn.embedding_lookup(self.A_1, stories) * self._encoding
                     m_emb_A_seq = tf.unpack(m_emb_A, axis=1)
 
                     all_h_pooled = []
@@ -274,6 +281,8 @@ class MemN2N(object):
                                     name="conv")
                                 # Apply nonlinearity
                                 h = tf.nn.relu(tf.nn.bias_add(conv, self.A_conv_b[i]), name="relu")
+                                # h = tf.nn.bias_add(conv, self.A_conv_b[i])
+                                
                                 # Maxpooling over the outputs
                                 pooled = tf.nn.max_pool(
                                     h,
@@ -298,7 +307,7 @@ class MemN2N(object):
 
                 else:
                     with tf.variable_scope('hop_{}'.format(hopn - 1)):
-                        m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
+                        m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories) * self._encoding
 
                         m_emb_A_seq = tf.unpack(m_emb_A, axis=1)
 
@@ -317,6 +326,8 @@ class MemN2N(object):
                                         name="conv")
                                     # Apply nonlinearity
                                     h = tf.nn.relu(tf.nn.bias_add(conv, self.C_conv_b[hopn - 1][i]), name="relu")
+                                    # h = tf.nn.bias_add(conv, self.C_conv_b[hopn - 1][i])
+                                    
                                     # Maxpooling over the outputs
                                     pooled = tf.nn.max_pool(
                                         h,
@@ -347,7 +358,7 @@ class MemN2N(object):
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
 
-                m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
+                m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories) * self._encoding
                 m_emb_C_seq = tf.unpack(m_emb_C, axis=1)
 
                 with tf.variable_scope('hop_{}'.format(hopn)):
@@ -366,6 +377,8 @@ class MemN2N(object):
                                     name="conv")
                                 # Apply nonlinearity
                                 h = tf.nn.relu(tf.nn.bias_add(conv, self.C_conv_b[hopn][i]), name="relu")
+                                # h = tf.nn.bias_add(conv, self.C_conv_b[hopn][i])
+                                
                                 # Maxpooling over the outputs
                                 pooled = tf.nn.max_pool(
                                     h,
