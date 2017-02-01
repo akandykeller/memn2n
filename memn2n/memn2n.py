@@ -163,15 +163,15 @@ class MemN2N(object):
             C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
 
             self.A_1 = tf.Variable(A, name="A")
-            self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
+            # self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
             self.C = []
-            self.TC = []
+            #self.TC = []
 
             for hopn in range(self._hops):
                 with tf.variable_scope('hop_{}'.format(hopn)):
                     self.C.append(tf.Variable(C, name="C"))
-                    self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC'))
+                    # self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC'))
 
             # Dont use projection for layerwise weight sharing
             # self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
@@ -191,12 +191,12 @@ class MemN2N(object):
             for hopn in range(self._hops):
                 if hopn == 0:
                     m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
-                    m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA_1
+                    m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) # + self.TA_1
 
                 else:
                     with tf.variable_scope('hop_{}'.format(hopn - 1)):
                         m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
-                        m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TC[hopn - 1]
+                        m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) # + self.TC[hopn - 1]
 
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
@@ -208,7 +208,7 @@ class MemN2N(object):
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
 
                 m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
-                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC[hopn]
+                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) # + self.TC[hopn]
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
