@@ -56,7 +56,7 @@ class MemN2N(object):
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
-        num_filters=5,
+        num_filters=4,
         initializer=tf.random_normal_initializer(stddev=0.1),
         encoding=position_encoding,
         session=tf.Session(),
@@ -108,7 +108,7 @@ class MemN2N(object):
         self._init = initializer
         self._name = name
 
-        self.filter_sizes = [1, 3, 5, 7] 
+        self.filter_sizes = [1, 3, 4, 5, 7] 
 
         self._build_inputs()
         self._build_vars()
@@ -170,7 +170,7 @@ class MemN2N(object):
             C = tf.concat(0, [ nil_word_slot, self._init([self._vocab_size-1, self._embedding_size]) ])
 
             self.A_1 = tf.Variable(A, name="A")
-            self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
+            # self.TA_1 = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
             self.A_conv_W = []
             self.A_conv_b = []
@@ -185,7 +185,7 @@ class MemN2N(object):
             self.W_A_proj = tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_A_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1])
 
             self.C = []
-            self.TC = []
+            # self.TC = []
 
             self.C_conv_W = []
             self.C_conv_b = []
@@ -195,7 +195,7 @@ class MemN2N(object):
             for hopn in range(self._hops):
                 with tf.variable_scope('hop_{}'.format(hopn)):
                     self.C.append(tf.Variable(C, name="C"))
-                    self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC'))
+                    # self.TC.append(tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC'))
 
                     self.C_conv_W.append([])
                     self.C_conv_b.append([])
@@ -236,11 +236,7 @@ class MemN2N(object):
                     # Apply nonlinearity
                     h = tf.nn.relu(tf.nn.bias_add(conv, self.A_conv_b[i]), name="relu")
                     # h = tf.nn.bias_add(conv, self.A_conv_b[i])
-                    
 
-                    import ipdb
-                    ipdb.set_trace()
-                    
                     # Try just summing inputs? / Try less filters on easier tasks
 
                     # Maxpooling over the outputs
@@ -303,7 +299,7 @@ class MemN2N(object):
 
                     m_A_proj = tf.batch_matmul(m_A, self.W_A_proj)
 
-                    m_A = m_A_proj + self.TA_1
+                    m_A = m_A_proj # + self.TA_1
 
                 else:
                     with tf.variable_scope('hop_{}'.format(hopn - 1)):
@@ -347,7 +343,7 @@ class MemN2N(object):
                         m_A = tf.pack(all_h_pooled, axis=1)
 
                         m_A_proj = tf.batch_matmul(m_A, self.W_C_proj[hopn - 1]) 
-                        m_A = m_A_proj + self.TC[hopn - 1]
+                        m_A = m_A_proj # + self.TC[hopn - 1]
 
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
@@ -397,7 +393,7 @@ class MemN2N(object):
 
                     m_C_pooled = tf.pack(all_h_pooled, axis=1)
                     m_C_proj = tf.batch_matmul(m_C_pooled, self.W_C_proj[hopn]) 
-                    m_C = m_C_proj + self.TC[hopn]
+                    m_C = m_C_proj # + self.TC[hopn]
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
