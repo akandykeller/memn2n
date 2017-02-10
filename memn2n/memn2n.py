@@ -18,8 +18,11 @@ def position_encoding(sentence_size, embedding_size):
     le = embedding_size+1
     for i in range(1, le):
         for j in range(1, ls):
-            encoding[i-1, j-1] = (i - (le-1)/2) * (j - (ls-1)/2)
+            encoding[i-1, j-1] = (i - (embedding_size+1)/2.0) * (j - (sentence_size+1)/2.0)
     encoding = 1 + 4 * encoding / embedding_size / sentence_size
+    print encoding
+    #print sentence_size
+
     return np.transpose(encoding)
 
 def zero_nil_slot(t, name=None):
@@ -113,7 +116,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
+        logits, self.q_emb, self.u_0 = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -165,8 +168,8 @@ class MemN2N(object):
             self.B = tf.Variable(B, name="B")
             self.C = tf.Variable(C, name="C")
 
-            self.TC = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC')
-            self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
+            # self.TC = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TC')
+            # self.TA = tf.Variable(self._init([self._memory_size, self._embedding_size]), name='TA')
 
             self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
             self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
@@ -175,11 +178,12 @@ class MemN2N(object):
     def _inference(self, stories, queries):
         with tf.variable_scope(self._name):
             q_emb = tf.nn.embedding_lookup(self.B, queries)
-            u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
-            u = [u_0]
+            u_0 = q_emb * self._encoding
+            u_0_s = tf.reduce_sum(u_0, 1)
+            u = [u_0_s]
             for _ in range(self._hops):
                 m_emb_A = tf.nn.embedding_lookup(self.A, stories)
-                m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) + self.TA
+                m_A = tf.reduce_sum(m_emb_A * self._encoding, 2) # + self.TA
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
                 dotted = tf.reduce_sum(m_A * u_temp, 2)
@@ -190,7 +194,7 @@ class MemN2N(object):
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
 
                 m_emb_C = tf.nn.embedding_lookup(self.C, stories)
-                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) + self.TC
+                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) # + self.TC
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
@@ -202,7 +206,7 @@ class MemN2N(object):
 
                 u.append(u_k)
 
-            return tf.matmul(u_k, self.W)
+            return [tf.matmul(u_k, self.W), q_emb, u_0]
 
     def batch_fit(self, stories, queries, answers):
         """Runs the training algorithm over the passed batch
@@ -217,6 +221,17 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
+        q_emb, u_0 = self._sess.run([self.q_emb, self.u_0], feed_dict=feed_dict)
+
+        # print "q_emb:  " 
+        # print "***"*100
+        # print q_emb
+        # print "u_0:  " 
+        # print "***"*100
+        # print u_0
+        # print "***"*100
+        # print "***"*100
+        
         return loss
 
     def predict(self, stories, queries):
