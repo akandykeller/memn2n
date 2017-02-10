@@ -1,6 +1,6 @@
 Task,Training Accuracy,Validation Accuracy,Testing Accuracy
 1,0.97,0.95,0.96
-2,0.84,0.68,0.61
+2,0.84,0.68,0.61 (got 0.5 in matlab)
 3,0.5,0.4,0.3
 4,0.93,0.94,0.93
 5,0.91,0.76,0.81

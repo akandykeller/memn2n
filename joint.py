@@ -14,13 +14,14 @@ import numpy as np
 import pandas as pd
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
+tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
 tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("embedding_size", 40, "Embedding size for embedding matrices.")
+tf.flags.DEFINE_integer("embedding_size", 60, "Embedding size for embedding matrices.")
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
 tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en/", "Directory containing bAbI tasks")
@@ -105,7 +106,15 @@ batches = [(start, end) for start,end in batches]
 
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
+    for t in range(1, FLAGS.epochs+1):
+        # Stepped learning rate
+        if t - 1 <= 200:
+            anneal = 2.0 ** ((t - 1) // FLAGS.anneal_rate)
+        else:
+            anneal = 2.0 ** (200 // FLAGS.anneal_rate)
+        lr = FLAGS.learning_rate / anneal
+
     for i in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
@@ -113,7 +122,7 @@ with tf.Session() as sess:
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
-            cost_t = model.batch_fit(s, q, a)
+            cost_t = model.batch_fit(s, q, a, lr)
             total_cost += cost_t
 
         if i % FLAGS.evaluation_interval == 0:

@@ -56,7 +56,7 @@ class MemN2N(object):
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
-        num_filters=4,
+        num_filters=10,
         initializer=tf.random_normal_initializer(stddev=0.1),
         encoding=position_encoding,
         session=tf.Session(),
@@ -108,8 +108,21 @@ class MemN2N(object):
         self._init = initializer
         self._name = name
 
-        self.filter_sizes = [1, 3, 4, 5, 7] 
+        # self.filter_sizes = [1, 4, 6, 8, 10, 11] 
+        self.filter_sizes = [1,2,4,5,6,7]
+        # if sentence_size <= 5:
+        #     self.filter_sizes = range(1, sentence_size)
+        # else:
+        #     self.filter_sizes = list(set([1, int(sentence_size/4), int(sentence_size/2), int(sentence_size*3.0/4.0), sentence_size]))
 
+        # if len(self.filter_sizes) < 5:
+        #     self._num_filters = int(20 / len(self.filter_sizes))
+
+        #     while self._num_filters * len(self.filter_sizes) < 20:
+        #         self.filter_sizes.append(sentence_size)
+
+
+        print('Filter sizes: {}'.format(self.filter_sizes))
         self._build_inputs()
         self._build_vars()
 
@@ -258,6 +271,9 @@ class MemN2N(object):
             u = [q_A_proj[:, 0]]
 
             for hopn in range(self._hops):
+                import ipdb
+                ipdb.set_trace()
+
                 if hopn == 0:
                     m_emb_A = tf.nn.embedding_lookup(self.A_1, stories) * self._encoding
                     m_emb_A_seq = tf.unpack(m_emb_A, axis=1)
