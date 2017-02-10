@@ -14,11 +14,12 @@ import numpy as np
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
+tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
-tf.flags.DEFINE_integer("epochs", 200, "Number of epochs to train for.")
+tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
 tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.")
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
 tf.flags.DEFINE_integer("task_id", 1, "bAbI task id, 1 <= id <= 20")
@@ -41,7 +42,7 @@ sentence_size = max(map(len, chain.from_iterable(s for s, _, _ in data)))
 query_size = max(map(len, (q for _, q, _ in data)))
 memory_size = min(FLAGS.memory_size, max_story_size)
 
-# Add time indexes?
+# Add time words/indexes
 for i in range(memory_size):
     word_idx['time{}'.format(i+1)] = 'time{}'.format(i+1)
 
@@ -78,8 +79,6 @@ val_labels = np.argmax(valA, axis=1)
 tf.set_random_seed(FLAGS.random_state)
 batch_size = FLAGS.batch_size
 
-# optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
-
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
 
@@ -88,10 +87,10 @@ with tf.Session() as sess:
                    hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
     for t in range(1, FLAGS.epochs+1):
         # Stepped learning rate
-        if t - 1 <= 100:
+        if t - 1 <= FLAGS.anneal_stop_epoch:
             anneal = 2.0 ** ((t - 1) // FLAGS.anneal_rate)
         else:
-            anneal = 2.0 ** (100 // FLAGS.anneal_rate)
+            anneal = 2.0 ** (FLAGS.anneal_stop_epoch // FLAGS.anneal_rate)
         lr = FLAGS.learning_rate / anneal
 
         np.random.shuffle(batches)

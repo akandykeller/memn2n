@@ -20,6 +20,8 @@ def position_encoding(sentence_size, embedding_size):
         for j in range(1, ls):
             encoding[i-1, j-1] = (i - (embedding_size+1)/2) * (j - (sentence_size+1)/2)
     encoding = 1 + 4 * encoding / embedding_size / sentence_size
+    
+    # Make position encoding of time words identity to avoid modifying them 
     encoding[:, -1] = 1.0
     return np.transpose(encoding)
 
@@ -204,8 +206,8 @@ class MemN2N(object):
                 probs = tf.nn.softmax(dotted)
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
-
-                m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
+                with tf.variable_scope('hop_{}'.format(hopn)):
+                    m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
                 m_C = tf.reduce_sum(m_emb_C * self._encoding, 2) # + self.TC[hopn]
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])

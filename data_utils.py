@@ -101,9 +101,8 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         # take only the most recent sentences that fit in memory
         ss = ss[::-1][:memory_size][::-1]
 
-        #import ipdb
-        # ipdb.set_trace()
-        # Make the last word of each sentence the time 'word' which corresponds to vector of lookup table
+        # Make the last word of each sentence the time 'word' which 
+        # corresponds to vector of lookup table
         for i in range(len(ss)):
             ss[i][-1] = len(word_idx) - memory_size - i + len(ss)
 
