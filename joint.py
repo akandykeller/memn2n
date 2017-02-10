@@ -50,6 +50,7 @@ query_size = max(map(len, (q for _, q, _ in data)))
 memory_size = min(FLAGS.memory_size, max_story_size)
 vocab_size = len(word_idx) + 1 # +1 for nil word
 sentence_size = max(query_size, sentence_size) # for the position
+sentence_size += 1  # +1 for time words
 
 print("Longest sentence length", sentence_size)
 print("Longest story length", max_story_size)
