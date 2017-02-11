@@ -18,8 +18,11 @@ def position_encoding(sentence_size, embedding_size):
     le = embedding_size+1
     for i in range(1, le):
         for j in range(1, ls):
-            encoding[i-1, j-1] = (i - (le-1)/2) * (j - (ls-1)/2)
+            encoding[i-1, j-1] = (i - (embedding_size+1)/2) * (j - (sentence_size+1)/2)
     encoding = 1 + 4 * encoding / embedding_size / sentence_size
+
+    # Make position encoding of time words identity to avoid modifying them 
+    encoding[:, -1] = 1.0
     return np.transpose(encoding)
 
 def zero_nil_slot(t, name=None):
@@ -195,7 +198,7 @@ class MemN2N(object):
                     self.A_conv_b.append(tf.Variable(tf.constant(0.1, shape=[self._num_filters]), name="b"))
 
             # self.W_A_proj = tf.tile(tf.Variable(self.ones([1, num_filters_total, self._embedding_size]), name="W_A_proj"), [tf.shape(self._stories)[0], 1, 1])
-            self.W_A_proj = tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_A_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1])
+            # self.W_A_proj = tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_A_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1])
 
             self.C = []
             # self.TC = []
@@ -203,7 +206,7 @@ class MemN2N(object):
             self.C_conv_W = []
             self.C_conv_b = []
 
-            self.W_C_proj = []
+            # self.W_C_proj = []
 
             for hopn in range(self._hops):
                 with tf.variable_scope('hop_{}'.format(hopn)):
@@ -220,7 +223,7 @@ class MemN2N(object):
                             self.C_conv_b[hopn].append(tf.Variable(tf.constant(0.1, shape=[self._num_filters]), name="b"))
                     
                     # self.W_C_proj.append(tf.tile(tf.Variable(self._init([1, num_filters_total, self._embedding_size]), name="W_C_proj"), [tf.shape(self._stories)[0], 1, 1]))
-                    self.W_C_proj.append(tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_C_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1]))
+                    # self.W_C_proj.append(tf.tile(tf.expand_dims(tf.Variable(np.identity(self._embedding_size, dtype=np.float32), name="W_C_proj", trainable=False), 0), [tf.shape(self._stories)[0], 1, 1]))
 
             # Dont use projection for layerwise weight sharing
             # self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
@@ -266,14 +269,11 @@ class MemN2N(object):
             h_pool = tf.concat(3, pooled_outputs)
             h_pool_flat = tf.expand_dims(tf.reshape(h_pool, [-1, num_filters_total]), 1)
 
-            q_A_proj = tf.batch_matmul(h_pool_flat, self.W_A_proj)
+            q_A_proj = h_pool_flat #tf.batch_matmul(h_pool_flat, self.W_A_proj)
 
             u = [q_A_proj[:, 0]]
 
             for hopn in range(self._hops):
-                import ipdb
-                ipdb.set_trace()
-
                 if hopn == 0:
                     m_emb_A = tf.nn.embedding_lookup(self.A_1, stories) * self._encoding
                     m_emb_A_seq = tf.unpack(m_emb_A, axis=1)
@@ -313,9 +313,8 @@ class MemN2N(object):
 
                     m_A = tf.pack(all_h_pooled, axis=1)
 
-                    m_A_proj = tf.batch_matmul(m_A, self.W_A_proj)
-
-                    m_A = m_A_proj # + self.TA_1
+                    # m_A_proj = tf.batch_matmul(m_A, self.W_A_proj)
+                    # m_A = m_A_proj # + self.TA_1
 
                 else:
                     with tf.variable_scope('hop_{}'.format(hopn - 1)):
@@ -358,8 +357,8 @@ class MemN2N(object):
 
                         m_A = tf.pack(all_h_pooled, axis=1)
 
-                        m_A_proj = tf.batch_matmul(m_A, self.W_C_proj[hopn - 1]) 
-                        m_A = m_A_proj # + self.TC[hopn - 1]
+                        # m_A_proj = tf.batch_matmul(m_A, self.W_C_proj[hopn - 1]) 
+                        # m_A = m_A_proj # + self.TC[hopn - 1]
 
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
@@ -408,8 +407,8 @@ class MemN2N(object):
                         all_h_pooled.append(h_pool_flat)
 
                     m_C_pooled = tf.pack(all_h_pooled, axis=1)
-                    m_C_proj = tf.batch_matmul(m_C_pooled, self.W_C_proj[hopn]) 
-                    m_C = m_C_proj # + self.TC[hopn]
+                    # m_C_proj = tf.batch_matmul(m_C_pooled, self.W_C_proj[hopn]) 
+                    m_C = m_C_pooled # + self.TC[hopn]
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
