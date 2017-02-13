@@ -14,6 +14,8 @@ import numpy as np
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
+tf.flags.DEFINE_float("temp_init", 1.0, "Initial_softmax temp")
+tf.flags.DEFINE_float("temp_anneal_rate", 0.00003, "Rate to anneal softmax temp")
 tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
@@ -95,23 +97,29 @@ with tf.Session() as sess:
 
         np.random.shuffle(batches)
         total_cost = 0.0
-        for start, end in batches:
+        for batch_i, (start, end) in enumerate(batches):
+            if (batch_i - 1) <= FLAGS.anneal_stop_epoch:
+                temp = FLAGS.temp_init * np.exp(-FLAGS.temp_anneal_rate * (batch_i + t * len(batches)))
+            else:
+                temp = FLAGS.temp_init * np.exp(-FLAGS.temp_anneal_rate * FLAGS.anneal_stop_epoch * len(batches))
+
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
-            cost_t = model.batch_fit(s, q, a, lr)
+            cost_t = model.batch_fit(s, q, a, lr, temp)
             total_cost += cost_t
 
         if t % FLAGS.evaluation_interval == 0:
+            print("Temp: {}".format(temp))
             train_preds = []
             for start in range(0, n_train, batch_size):
                 end = start + batch_size
                 s = trainS[start:end]
                 q = trainQ[start:end]
-                pred = model.predict(s, q)
+                pred = model.predict(s, q, temp)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valQ)
+            val_preds = model.predict(valS, valQ, temp)
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels)
             val_acc = metrics.accuracy_score(val_preds, val_labels)
 
@@ -122,6 +130,6 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-    test_preds = model.predict(testS, testQ)
+    test_preds = model.predict(testS, testQ, temp)
     test_acc = metrics.accuracy_score(test_preds, test_labels)
     print("Testing Accuracy:", test_acc)

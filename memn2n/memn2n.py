@@ -52,6 +52,39 @@ def add_gradient_noise(t, stddev=1e-3, name=None):
         gn = tf.random_normal(tf.shape(t), stddev=stddev)
         return tf.add(t, gn, name=name)
 
+
+def sample_gumbel(shape, eps=1e-20): 
+  """Sample from Gumbel(0, 1)"""
+  U = tf.random_uniform(shape,minval=0,maxval=1)
+  return -tf.log(-tf.log(U + eps) + eps)
+
+
+def gumbel_softmax_sample(logits, temperature): 
+  """ Draw a sample from the Gumbel-Softmax distribution"""
+  y = logits + sample_gumbel(tf.shape(logits))
+  return tf.nn.softmax( y / temperature)
+
+
+def gumbel_softmax(logits, temperature, hard=False):
+  """Sample from the Gumbel-Softmax distribution and optionally discretize.
+  Args:
+    logits: [batch_size, n_class] unnormalized log-probs
+    temperature: non-negative scalar
+    hard: if True, take argmax, but differentiate w.r.t. soft sample y
+  Returns:
+    [batch_size, n_class] sample from the Gumbel-Softmax distribution.
+    If hard=True, then the returned sample will be one-hot, otherwise it will
+    be a probabilitiy distribution that sums to 1 across classes
+  """
+  y = gumbel_softmax_sample(logits, temperature)
+  if hard:
+    k = tf.shape(logits)[-1]
+    #y_hard = tf.cast(tf.one_hot(tf.argmax(y,1),k), y.dtype)
+    y_hard = tf.cast(tf.equal(y,tf.reduce_max(y,1,keep_dims=True)),y.dtype)
+    y = tf.stop_gradient(y_hard - y) + y
+  return y
+
+
 class MemN2N(object):
     """End-To-End Memory Network."""
     def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
@@ -116,7 +149,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
+        logits = self._inference(self._stories, self._queries, self._temp) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -157,6 +190,7 @@ class MemN2N(object):
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
+        self._temp = tf.placeholder(tf.float32, [], name="temp")
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -180,7 +214,7 @@ class MemN2N(object):
 
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
-    def _inference(self, stories, queries):
+    def _inference(self, stories, queries, temp):
         with tf.variable_scope(self._name):
             # Use A_1 for thee question embedding as per Adjacent Weight Sharing
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
@@ -202,7 +236,7 @@ class MemN2N(object):
                 dotted = tf.reduce_sum(m_A * u_temp, 2)
 
                 # Calculate probabilities
-                probs = tf.nn.softmax(dotted)
+                probs = gumbel_softmax(dotted, temp)
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
                 with tf.variable_scope('hop_{}'.format(hopn)):
@@ -227,7 +261,7 @@ class MemN2N(object):
             with tf.variable_scope('hop_{}'.format(self._hops)):
                 return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, queries, answers, learning_rate):
+    def batch_fit(self, stories, queries, answers, learning_rate, temp):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -238,11 +272,11 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate}
+        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate, self._temp: temp}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
 
-    def predict(self, stories, queries):
+    def predict(self, stories, queries, temp):
         """Predicts answers as one-hot encoding.
 
         Args:
@@ -252,10 +286,10 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._stories: stories, self._queries: queries, self._temp : temp}
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
-    def predict_proba(self, stories, queries):
+    def predict_proba(self, stories, queries, temp):
         """Predicts probabilities of answers.
 
         Args:
@@ -265,10 +299,10 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._stories: stories, self._queries: queries, self._temp: temp}
         return self._sess.run(self.predict_proba_op, feed_dict=feed_dict)
 
-    def predict_log_proba(self, stories, queries):
+    def predict_log_proba(self, stories, queries, temp):
         """Predicts log probabilities of answers.
 
         Args:
@@ -277,5 +311,5 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._stories: stories, self._queries: queries, self._temp:temp}
         return self._sess.run(self.predict_log_proba_op, feed_dict=feed_dict)
