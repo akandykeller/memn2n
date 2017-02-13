@@ -201,8 +201,11 @@ class MemN2N(object):
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
                 dotted = tf.reduce_sum(m_A * u_temp, 2)
 
+ #                 m_A_norm = tf.sqrt(tf.reduce_sum(tf.square(m_A), axis=2) + 1e-20)
+   #               u_temp = tf.sqrt(tf.reduce_sum(tf.square(u_temp), axis=2) + 1e-20)
+
                 # Calculate probabilities
-                probs = tf.nn.softmax(dotted)
+                probs = tf.nn.softmax(dotted)# / (m_A_norm * u_temp))
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
                 with tf.variable_scope('hop_{}'.format(hopn)):
