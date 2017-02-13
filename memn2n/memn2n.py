@@ -241,12 +241,7 @@ class MemN2N(object):
             m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
             m_A_states_h_t = tf.transpose(m_A_states_h, [1, 0 ,2])
 
-            if hopn == 0:
-                with tf.variable_scope(self._name):
-                    m_A = m_A_states_h_t
-            else:
-                with tf.variable_scope('hop_{}'.format(hopn - 1)):
-                    m_A = m_A_states_h_t
+            m_A = m_A_states_h_t
 
             # hack to get around no reduce_dot
             u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])

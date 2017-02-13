@@ -13,6 +13,7 @@ import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
 import copy
+import csv
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
@@ -119,6 +120,16 @@ with tf.Session() as sess:
             print('Training Accuracy:', train_acc)
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
+
+            with open('results/rnn_adj_all/train_log_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+                fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+                writer.writerow({'Epoch':t, 
+                                 'Total Cost':total_cost,
+                                 'Train Acc':train_acc,
+                                 'Validation Acc':val_acc})
+
 
     test_preds = model.predict(testS, testQ)
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
