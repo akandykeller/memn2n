@@ -225,8 +225,6 @@ class MemN2N(object):
             m_A_states_all_sent = [] 
 
             m_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
-            m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
-
             m_cell = rnn_cell.DropoutWrapper(m_cell,
                                              input_keep_prob=self._rnn_input_keep_prob,
                                              output_keep_prob=self._rnn_output_keep_prob)
@@ -234,14 +232,10 @@ class MemN2N(object):
             for i, sentence in enumerate(m_emb_A_sentences):
                 reuse = True
                 with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
-                    if i == 0 and hopn == 0:
-                        init_state = q_states
-                    elif i == 0:
-                        init_state = m_init_state
-                    else:
-                        init_state = m_states
+                    m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
+
                     m_emb_A_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(m_cell, m_emb_A_seq, initial_state=init_state)
+                    outputs, m_states = rnn.rnn(m_cell, m_emb_A_seq, initial_state=m_init_state)
                     m_A_states_all_sent.append(m_states)
 
             m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
@@ -271,7 +265,6 @@ class MemN2N(object):
             m_C_states_all_sent = [] 
             
             c_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
-            c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
             c_cell = rnn_cell.DropoutWrapper(c_cell,
                                              input_keep_prob=self._rnn_input_keep_prob,
@@ -279,15 +272,13 @@ class MemN2N(object):
 
             for i, sentence in enumerate(m_emb_C_sentences):
                 reuse = None if (i == 0) else True
-                if i == 0:
-                    init_state = c_init_state
-                else:
-                    init_state = m_states
+
+                c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
                 # Again use a different RNN for each out memory hop... too many rnns
                 with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
                     m_emb_C_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(c_cell, m_emb_C_seq, initial_state=init_state)
+                    outputs, m_states = rnn.rnn(c_cell, m_emb_C_seq, initial_state=c_init_state)
                     m_C_states_all_sent.append(m_states[-1])
 
             m_C_states_h = tf.pack(m_C_states_all_sent)
