@@ -112,7 +112,7 @@ class MemN2N(object):
         self._name = name
 
         # self.filter_sizes = [1, 4, 6, 8, 10, 11] 
-        self.filter_sizes = [1,2,4,5,6,7]
+        # self.filter_sizes = [1,2,4,5,6,7]
         # if sentence_size <= 5:
         #     self.filter_sizes = range(1, sentence_size)
         # else:
@@ -124,8 +124,13 @@ class MemN2N(object):
         #     while self._num_filters * len(self.filter_sizes) < 20:
         #         self.filter_sizes.append(sentence_size)
 
+        self.filter_sizes = range(1, sentence_size + 1)
+        self._num_filters = int(100.0 / len(self.filter_sizes))
+        self._embedding_size = self._num_filters * len(self.filter_sizes)
+
 
         print('Filter sizes: {}'.format(self.filter_sizes))
+        print('Embedding Size: {}'.format(self._embedding_size))
         self._build_inputs()
         self._build_vars()
 
