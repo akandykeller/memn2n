@@ -111,14 +111,6 @@ class MemN2N(object):
         self._init = initializer
         self._name = name
 
-	#self.filter_sizes = [x for x in range(1, sentence_size+1)]
-	self.filter_sizes = [1, sentence_size]
-	self._num_filters = int(60 / len(self.filter_sizes))
-
-	self._embedding_size = int(len(self.filter_sizes) * self._num_filters)
-	
-	print("Filter Sizes: {}".format(self.filter_sizes))
-	print("Embedding Size: {}".format(self._embedding_size))
         # self.filter_sizes = [1, 4, 6, 8, 10, 11] 
         # self.filter_sizes = [1,2,4,5,6,7]
         # if sentence_size <= 5:
