@@ -275,7 +275,7 @@ class MemN2N(object):
             h_pool_flat = tf.expand_dims(tf.reshape(h_pool, [-1, num_filters_total]), 1)
 
             q_A_proj = h_pool_flat #tf.batch_matmul(h_pool_flat, self.W_A_proj)
-	    q_A_proj = tf.nn.dropout(q_A_proj, 0.75)		
+            q_A_proj = tf.nn.dropout(q_A_proj, 0.75)		
 
             u = [q_A_proj[:, 0]]
 
@@ -314,7 +314,7 @@ class MemN2N(object):
                         num_filters_total = self._num_filters * len(self.filter_sizes)
                         h_pool = tf.concat(3, pooled_outputs)
                         h_pool_flat = tf.reshape(h_pool, [-1, num_filters_total])
-			h_pool_flat = tf.nn.dropout(h_pool_flat, 0.75)
+                        h_pool_flat = tf.nn.dropout(h_pool_flat, 0.75)
 
                         all_h_pooled.append(h_pool_flat)
 
@@ -360,7 +360,7 @@ class MemN2N(object):
                             h_pool = tf.concat(3, pooled_outputs)
                             h_pool_flat = tf.reshape(h_pool, [-1, num_filters_total])
 			    
-			    h_pool_flat = tf.nn.dropout(h_pool_flat, 0.75)
+            			    h_pool_flat = tf.nn.dropout(h_pool_flat, 0.75)
 
                             all_h_pooled.append(h_pool_flat)
 
@@ -412,7 +412,7 @@ class MemN2N(object):
                         num_filters_total = self._num_filters * len(self.filter_sizes)
                         h_pool = tf.concat(3, pooled_outputs)
                         h_pool_flat = tf.reshape(h_pool, [-1, num_filters_total])
-			h_pool_flat = tf.nn.dropout(h_pool_flat, 0.75)
+                        h_pool_flat = tf.nn.dropout(h_pool_flat, 0.75)
                         all_h_pooled.append(h_pool_flat)
 
                     m_C_pooled = tf.pack(all_h_pooled, axis=1)
