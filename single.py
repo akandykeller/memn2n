@@ -14,7 +14,7 @@ import numpy as np
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
-tf.flags.DEFINE_float("temp_init", 1.0, "Initial_softmax temp")
+tf.flags.DEFINE_float("temp_init",  0.5, "Initial_softmax temp")
 tf.flags.DEFINE_float("temp_anneal_rate", 0.00003, "Rate to anneal softmax temp")
 tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
@@ -98,10 +98,10 @@ with tf.Session() as sess:
         np.random.shuffle(batches)
         total_cost = 0.0
         for batch_i, (start, end) in enumerate(batches):
-            if (batch_i - 1) <= FLAGS.anneal_stop_epoch:
-                temp = FLAGS.temp_init * np.exp(-FLAGS.temp_anneal_rate * (batch_i + t * len(batches)))
-            else:
-                temp = FLAGS.temp_init * np.exp(-FLAGS.temp_anneal_rate * FLAGS.anneal_stop_epoch * len(batches))
+            #if (t - 1) <= FLAGS.anneal_stop_epoch:
+            temp = FLAGS.temp_init * np.exp(-FLAGS.temp_anneal_rate * (batch_i + t * len(batches)))
+            #else:
+                #temp = FLAGS.temp_init * np.exp(-FLAGS.temp_anneal_rate * FLAGS.anneal_stop_epoch * len(batches))
 
             s = trainS[start:end]
             q = trainQ[start:end]
