@@ -22,6 +22,7 @@ def position_encoding(sentence_size, embedding_size):
     encoding = 1 + 4 * encoding / embedding_size / sentence_size
     # Make position encoding of time words identity to avoid modifying them 
     encoding[:, -1] = 1.0
+
     return np.transpose(encoding)
 
 def zero_nil_slot(t, name=None):
@@ -116,7 +117,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
+        logits, self.q_emb, self.u_0 = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -205,9 +206,11 @@ class MemN2N(object):
                 probs = tf.nn.softmax(dotted)
 
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
+
                 with tf.variable_scope('hop_{}'.format(hopn)):
                     m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
                 m_C = tf.reduce_sum(m_emb_C * self._encoding, 2)
+
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
@@ -240,6 +243,17 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
+        q_emb, u_0 = self._sess.run([self.q_emb, self.u_0], feed_dict=feed_dict)
+
+        # print "q_emb:  " 
+        # print "***"*100
+        # print q_emb
+        # print "u_0:  " 
+        # print "***"*100
+        # print u_0
+        # print "***"*100
+        # print "***"*100
+        
         return loss
 
     def predict(self, stories, queries):
