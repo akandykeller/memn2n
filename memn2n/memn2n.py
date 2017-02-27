@@ -24,7 +24,7 @@ def position_encoding(sentence_size, embedding_size):
             encoding[i-1, j-1] = (i - (embedding_size+1)/2) * (j - (sentence_size+1)/2)
     encoding = 1 + 4 * encoding / embedding_size / sentence_size
     # Make position encoding of time words identity to avoid modifying them 
-    encoding[:, -1] = 1.0
+    # encoding[:, -1] = 1.0
     return np.transpose(encoding)
 
 def zero_nil_slot(t, name=None):
@@ -124,7 +124,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
+        logits = self._inference(self._stories, self._stories_len, self._queries, self._queries_len) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -162,7 +162,9 @@ class MemN2N(object):
 
     def _build_inputs(self):
         self._stories = tf.placeholder(tf.int32, [None, self._memory_size, self._sentence_size], name="stories")
+        self._stories_len = tf.placeholder(tf.int32, [None, self._memory_size], name="stories_lens")
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
+        self._queries_len = tf.placeholder(tf.int32, [None], name="queries_lens")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
 
     def _build_vars(self):
@@ -187,26 +189,30 @@ class MemN2N(object):
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
 
-    def _inference(self, stories, queries):
+    def _inference(self, stories, stories_lens, queries, queries_lens):
         with tf.variable_scope(self._name):
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
-            q_emb_seq = tf.unpack(q_emb, axis=1)
+            # q_emb_seq = tf.unpack(q_emb, axis=1)
 
+        # Adjacent weight sharing scheme
         rnn_A_scopes = ['RNN_A_1', 'RNN_C_1', 'RNN_C_2']
         rnn_C_scopes = ['RNN_C_1', 'RNN_C_2', 'RNN_C_3']
         
+        # Layerwise weight sharing scheme
+        # rnn_A_scopes = ['RNN_A_1', 'RNN_A_1', 'RNN_A_2']
+        # rnn_C_scopes = ['RNN_C_1', 'RNN_C_1', 'RNN_C_1']
+        # self._use_proj = True
+
         # Let B = A_1
         with tf.variable_scope(rnn_A_scopes[0], reuse=None):
-            q_cell = rnn_cell.LSTMCell(self._embedding_size, 
-                                       forget_bias=1.0, 
-                                       use_peepholes=True)
+            q_cell = rnn_cell.GRUCell(self._embedding_size)
             # Add dropout
             q_cell = rnn_cell.DropoutWrapper(q_cell,
                                              input_keep_prob=self._rnn_input_keep_prob,
                                              output_keep_prob=self._rnn_output_keep_prob)
             q_init_state = q_cell.zero_state(tf.shape(stories)[0], tf.float32)
-
-            outputs, q_states = rnn.rnn(q_cell, q_emb_seq, initial_state=q_init_state)
+            q_states = rnn.dynamic_rnn(q_cell, q_emb, initial_state=q_init_state,
+                                       sequence_length=queries_lens)
 
         u = [q_states[-1]]
 
@@ -224,18 +230,20 @@ class MemN2N(object):
 
             m_A_states_all_sent = [] 
 
-            m_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
+            m_cell = rnn_cell.GRUCell(self._embedding_size)
             m_cell = rnn_cell.DropoutWrapper(m_cell,
                                              input_keep_prob=self._rnn_input_keep_prob,
                                              output_keep_prob=self._rnn_output_keep_prob)
 
             for i, sentence in enumerate(m_emb_A_sentences):
                 reuse = True
+                # Use adj-weight sharing 
                 with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
                     m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
-                    m_emb_A_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(m_cell, m_emb_A_seq, initial_state=m_init_state)
+                    # m_emb_A_seq = tf.unpack(sentence, axis=1)
+                    m_states = rnn.dynamic_rnn(m_cell, sentence, initial_state=m_init_state,
+                                               sequence_length=stories_lens[:, i])
                     m_A_states_all_sent.append(m_states)
 
             m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
@@ -259,21 +267,26 @@ class MemN2N(object):
 
             m_C_states_all_sent = [] 
             
-            c_cell = rnn_cell.LSTMCell(self._embedding_size, forget_bias=1.0, use_peepholes=True)
+            c_cell = rnn_cell.GRUCell(self._embedding_size)
 
             c_cell = rnn_cell.DropoutWrapper(c_cell,
                                              input_keep_prob=self._rnn_input_keep_prob,
                                              output_keep_prob=self._rnn_output_keep_prob)
 
             for i, sentence in enumerate(m_emb_C_sentences):
-                reuse = None if (i == 0) else True
+                if not self._use_proj:
+                    # For adj-weight sharing scheme
+                    reuse = None if (i == 0) else True
+                else:
+                    reuse = None if ((i == 0) and (hopn == 0)) else True
 
                 c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
-                # Again use a different RNN for each out memory hop... too many rnns
+                # Again use adj-weight sharing for rnn weights
                 with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
-                    m_emb_C_seq = tf.unpack(sentence, axis=1)
-                    outputs, m_states = rnn.rnn(c_cell, m_emb_C_seq, initial_state=c_init_state)
+                    # m_emb_C_seq = tf.unpack(sentence, axis=1)
+                    m_states = rnn.dynamic_rnn(c_cell, sentence, initial_state=c_init_state,
+                                               sequence_length=stories_lens[:, i])
                     m_C_states_all_sent.append(m_states[-1])
 
             m_C_states_h = tf.pack(m_C_states_all_sent)
@@ -302,7 +315,7 @@ class MemN2N(object):
         with tf.variable_scope('hop_{}'.format(self._hops)):
             return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, queries, answers):
+    def batch_fit(self, stories, s_lens, queries, q_lens, answers):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -313,11 +326,13 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers}
+        feed_dict = {self._stories: stories, self._stories_len: s_lens, 
+                     self._queries: queries, self._queries_len: q_lens, 
+                     self._answers: answers}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
 
-    def predict(self, stories, queries):
+    def predict(self, stories, s_lens, queries, q_lens):
         """Predicts answers as one-hot encoding.
 
         Args:
@@ -327,7 +342,8 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._stories: stories, self._stories_len: s_lens, 
+                     self._queries: queries, self._queries_len: q_lens} 
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
     def predict_proba(self, stories, queries):

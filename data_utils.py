@@ -90,26 +90,35 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     The answer array is returned as a one-hot encoding.
     """
     S = []
+    S_lens = []
     Q = []
+    Q_lens = []
     A = []
+
     for story, query, answer in data:
         ss = []
-        for i, sentence in enumerate(story, 1):
+        ss_lens = []
+        for i, sentence in enumerate(story):
             ls = max(0, sentence_size - len(sentence))
             ss.append([word_idx[w] for w in sentence] + [0] * ls)
+            # Add time word directly at the end of the sentence
+            ss[i][len(sentence)] = len(word_idx) - memory_size - i + len(story)
+            ss_lens.append(len(sentence) + 1)
 
         # take only the most recent sentences that fit in memory
         ss = ss[::-1][:memory_size][::-1]
+        ss_lens = ss_lens[::-1][:memory_size][::-1]
 
         # Make the last word of each sentence the time 'word' which 
         # corresponds to vector of lookup table
-        for i in range(len(ss)):
-            ss[i][-1] = len(word_idx) - memory_size - i + len(ss)
+        # for i in range(len(ss)):
+        #    ss[i][-1] = len(word_idx) - memory_size - i + len(ss)
 
         # pad to memory_size
         lm = max(0, memory_size - len(ss))
         for _ in range(lm):
             ss.append([0] * sentence_size)
+            ss_lens.append(0)
 
         lq = max(0, sentence_size - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
@@ -119,6 +128,8 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
             y[word_idx[a]] = 1
 
         S.append(ss)
+        S_lens.append(ss_lens)
         Q.append(q)
+        Q_lens.append(len(query))
         A.append(y)
-    return np.array(S), np.array(Q), np.array(A)
+    return np.array(S), np.array(S_lens), np.array(Q), np.array(Q_lens), np.array(A)
