@@ -118,18 +118,20 @@ class MemN2N(object):
         self._opt = optimizer
         self._name = name
         self._use_proj = use_proj
+        self._use_rnn_comb = False
 
         self._build_inputs()
         self._build_vars()
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits, q_rec_loss, m_rec_loss = self._inference(self._stories, self._stories_len, self._queries, self._queries_len) # (batch_size, vocab_size)
+        logits, q_rec_loss, m_rec_loss, c_rec_loss = self._inference(self._stories, self._stories_len, self._queries, self._queries_len) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
         # loss op
-        loss_op = cross_entropy_sum + q_rec_loss + m_rec_loss
+        loss_op = (1.0 - self._ae_lw) * cross_entropy_sum + self._ae_lw * (q_rec_loss + m_rec_loss + c_rec_loss)
+        # loss_op = cross_entropy_sum + self._ae_lw * (q_rec_loss + m_rec_loss + c_rec_loss)
 
         # gradient pipeline
         grads_and_vars = self._opt.compute_gradients(loss_op)
@@ -166,6 +168,7 @@ class MemN2N(object):
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._queries_len = tf.placeholder(tf.int32, [None], name="queries_lens")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
+        self._ae_lw = tf.placeholder(tf.float32, ())
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -240,7 +243,9 @@ class MemN2N(object):
             q_rec_loss = tf.reduce_sum(tf.square(tf.sub(q_dec_outputs_rev, q_emb))) / tf.to_float(tf.reduce_sum(queries_lens))
 
         u = [q_state]
-
+        m_rec_loss = tf.constant(0.0)
+        c_rec_loss = tf.constant(0.0)
+        
         for hopn in range(self._hops):
             if hopn == 0:
                 with tf.variable_scope(self._name):
@@ -276,7 +281,7 @@ class MemN2N(object):
                                                sequence_length=stories_lens[:, i])
                     m_A_states_all_sent.append(m_states)
 
-                reuse_dec = None if (i == 0 and hopn != 0) else True
+                reuse_dec = True
                 with tf.variable_scope(rnn_A_scopes[hopn] + '_dec', reuse=reuse_dec):
                     # only feed non-padded q_emb to decoder... cut by lengths, flip & repad
                     m_emb_revs = []
@@ -294,7 +299,7 @@ class MemN2N(object):
 
                     # compute reconstruction loss for regularization
                     m_dec_outputs_rev = m_dec_outputs[:, ::-1, :]
-                    m_rec_loss = tf.reduce_sum(tf.square(tf.sub(m_dec_outputs_rev, sentence))) / tf.to_float(tf.reduce_sum(stories_lens[:, i]))
+                    m_rec_loss += tf.reduce_sum(tf.square(tf.sub(m_dec_outputs_rev, sentence))) / tf.to_float(tf.reduce_sum(stories_lens[:, i]))
 
             m_A_states_h = tf.pack([h for c, h in m_A_states_all_sent])
             m_A_states_h_t = tf.transpose(m_A_states_h, [1, 0 ,2])
@@ -323,20 +328,42 @@ class MemN2N(object):
                                              input_keep_prob=self._rnn_input_keep_prob,
                                              output_keep_prob=self._rnn_output_keep_prob)
 
-            for i, sentence in enumerate(m_emb_C_sentences):
-                if not self._use_proj:
-                    # For adj-weight sharing scheme
-                    reuse = None if (i == 0) else True
-                else:
-                    reuse = None if ((i == 0) and (hopn == 0)) else True
+            # Decode query with 2nd GRU as autoencoder for regularization
+            c_dec_cell = rnn_cell.GRUCell(self._embedding_size)
+            c_dec_cell = rnn_cell.DropoutWrapper(c_dec_cell,
+                                                 input_keep_prob=self._rnn_input_keep_prob,
+                                                 output_keep_prob=self._rnn_output_keep_prob)
 
+            for i, sentence in enumerate(m_emb_C_sentences):
+                reuse = None if (i == 0) else True
                 c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
                 # Again use adj-weight sharing for rnn weights
                 with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
-                    m_states = rnn.dynamic_rnn(c_cell, sentence, initial_state=c_init_state,
+                    c_states = rnn.dynamic_rnn(c_cell, sentence, initial_state=c_init_state,
                                                sequence_length=stories_lens[:, i])
-                    m_C_states_all_sent.append(m_states[-1])
+                    m_C_states_all_sent.append(c_states[-1])
+
+                reuse_dec = None if (i == 0) else True
+                with tf.variable_scope(rnn_C_scopes[hopn] + '_dec', reuse=reuse_dec):
+                    # only feed non-padded q_emb to decoder... cut by lengths, flip & repad
+                    c_emb_revs = []
+                    # Need to cut sentences individually for each batch since lengths differ by batch
+                    for b in range(self._batch_size):
+                        c_emb_rev_nopad = tf.concat(0, [tf.zeros((1, self._embedding_size), dtype=tf.float32), sentence[b, :stories_lens[b, i], :][::-1, :]])[:-1, :]
+                        cl = self._sentence_size - stories_lens[b, i]
+                        c_emb_revs.append(tf.concat(0,  [c_emb_rev_nopad, tf.zeros(([cl, self._embedding_size]), dtype=tf.float32)]))
+                    # Re-combine over the batch
+                    c_emb_rev = tf.pack(c_emb_revs)
+
+                    c_dec_outputs, c_dec_state = rnn.dynamic_rnn(c_dec_cell, c_emb_rev, 
+                                                                 initial_state=c_states[-1],
+                                                                 sequence_length=stories_lens[:, i])
+
+                    # compute reconstruction loss for regularization
+                    c_dec_outputs_rev = c_dec_outputs[:, ::-1, :]
+                    c_rec_loss += tf.reduce_sum(tf.square(tf.sub(c_dec_outputs_rev, sentence))) / tf.to_float(tf.reduce_sum(stories_lens[:, i]))
+
 
             m_C_states_h = tf.pack(m_C_states_all_sent)
             m_C_states_h_t = tf.transpose(m_C_states_h, [1, 0 ,2])
@@ -348,9 +375,17 @@ class MemN2N(object):
 
             # Take weighted sum of embedded memories
             o_k = tf.reduce_sum(m_C_t * tf.expand_dims(probs, 1), 2)
-            
-            with tf.variable_scope(self._name):
-                if self._use_proj:
+                    
+            u_cell = rnn_cell.GRUCell(self._embedding_size)
+
+            #import ipdb
+            #ipdb.set_trace()
+            reuse = None if hopn == 0 else True
+            with tf.variable_scope('RNN_U_Scope', reuse=reuse):
+                if self._use_rnn_comb:
+                    u_k_states = rnn.dynamic_rnn(u_cell, tf.expand_dims(o_k, -1), initial_state=u[-1], sequence_length=tf.ones_like(stories_lens[:,0]))
+                    u_k = u_k_states[-1]
+                elif self._use_proj:
                     u_k = tf.matmul(u[-1], self.H) + o_k
                 else:
                     u_k = u[-1] + o_k
@@ -362,9 +397,9 @@ class MemN2N(object):
                 u.append(u_k)
 
         with tf.variable_scope('hop_{}'.format(self._hops)):
-            return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0])), q_rec_loss, m_rec_loss
+            return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0])), q_rec_loss, m_rec_loss, c_rec_loss
 
-    def batch_fit(self, stories, s_lens, queries, q_lens, answers):
+    def batch_fit(self, stories, s_lens, queries, q_lens, answers, ae_lw):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -377,7 +412,7 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._stories_len: s_lens, 
                      self._queries: queries, self._queries_len: q_lens, 
-                     self._answers: answers}
+                     self._answers: answers, self._ae_lw: ae_lw}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
 
