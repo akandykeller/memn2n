@@ -217,7 +217,7 @@ class MemN2N(object):
             q_outputs, q_state = rnn.dynamic_rnn(q_cell, q_emb, initial_state=q_init_state,
                                                  sequence_length=queries_lens)
 
-        with tf.variable_scope(rnn_A_scopes[0] + '_dec', reuse=None):
+        with tf.variable_scope('RNN_Q_dec', reuse=None):
             # Decode query with 2nd GRU as autoencoder for regularization
             q_dec_cell = rnn_cell.GRUCell(self._embedding_size)
             q_dec_cell = rnn_cell.DropoutWrapper(q_dec_cell,
@@ -288,8 +288,7 @@ class MemN2N(object):
                                                sequence_length=stories_lens[:, i])
                     m_A_states_all_sent.append(m_states)
 
-                reuse_dec = True
-                with tf.variable_scope(rnn_A_scopes[hopn] + '_dec', reuse=reuse_dec):
+                with tf.variable_scope(rnn_A_scopes[hopn] + '_dec', reuse=reuse):
                     # only feed non-padded q_emb to decoder... cut by lengths, flip & repad
                     m_emb_revs = []
                     # Need to cut sentences individually for each batch since lengths differ by batch
