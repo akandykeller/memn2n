@@ -14,6 +14,7 @@ import numpy as np
 from tqdm import tqdm
 import copy
 import csv
+import time
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
@@ -26,7 +27,7 @@ tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matr
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
 tf.flags.DEFINE_integer("task_id", 1, "bAbI task id, 1 <= id <= 20")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
-tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en/", "Directory containing bAbI tasks")
+tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en-10k/", "Directory containing bAbI tasks")
 FLAGS = tf.flags.FLAGS
 
 print("Started Task:", FLAGS.task_id)
@@ -90,54 +91,83 @@ batches = [(start, end) for start, end in batches]
 # Get list of ordered batches for eval before shuffling
 train_eval_batches = copy.copy(batches)
 
+dataset = {
+            'stories':trainS,
+            'stories_len':trainS_lens,
+            'queries':trainQ,
+            'queries_len':trainQ_lens,
+            'answers':trainA
+}
+
 with tf.Session() as sess:
-    model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
-    for t in range(1, FLAGS.epochs+1):
-        np.random.shuffle(batches)
-        total_cost = 0.0
-        for start, end in tqdm(batches, desc='Epoch {}: '.format(t)):
-            s = trainS[start:end]
-            s_lens = trainS_lens[start:end]
-            q = trainQ[start:end]
-            q_lens = trainQ_lens[start:end]
-            a = trainA[start:end]
+    model = MemN2N(dataset, batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, num_epochs=FLAGS.epochs, 
+                   session=sess, hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+    
+    # Start input enqueue threads.
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(sess=model._sess, coord=coord)
 
-            cost_t = model.batch_fit(s, s_lens, q, q_lens, a)
-            total_cost += cost_t
+    # And then after everything is built, start the training loop.
+    try:
+      step = 0
+      total_cost = 0.0
 
-        if t % FLAGS.evaluation_interval == 0:
-            train_preds = []
-            #for start in range(0, n_train, batch_size):
-            for start, end in tqdm(train_eval_batches, desc='Train Eval: '):
-                s = trainS[start:end]
-                s_lens = trainS_lens[start:end]
-                q = trainQ[start:end]
-                q_lens = trainQ_lens[start:end]
-                pred = model.predict(s, s_lens, q, q_lens)
-                train_preds += list(pred)
+      while not coord.should_stop():
+        start_time = time.time()
 
-            val_preds = model.predict(valS, valS_lens, valQ, valQ_lens)
-            train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
-            val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
+        cost_t = model.batch_fit()
+        total_cost += cost_t
 
-            print('-----------------------')
-            print('Epoch', t)
-            print('Total Cost:', total_cost)
-            print('Training Accuracy:', train_acc)
-            print('Validation Accuracy:', val_acc)
-            print('-----------------------')
+        duration = time.time() - start_time
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
-                fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        # Write the summaries and print an overview fairly often.
+        if step % 100 == 0:
+          # Print status to stdout.
+          print('Step %d: batch_cost = %.2f (%.3f sec)' % (step, cost_t,
+                                                     duration))
+          # train_preds = []
+          # for start, end in tqdm(train_eval_batches, desc='Train Eval: '):
+          #     s = trainS[start:end]
+          #     s_lens = trainS_lens[start:end]
+          #     q = trainQ[start:end]
+          #     q_lens = trainQ_lens[start:end]
+          #     pred = model.predict(s, s_lens, q, q_lens)
+          #     train_preds += list(pred)
 
-                writer.writerow({'Epoch':t, 
-                                 'Total Cost':total_cost,
-                                 'Train Acc':train_acc,
-                                 'Validation Acc':val_acc})
+          # val_preds = model.predict(valS, valS_lens, valQ, valQ_lens)
+          # train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
+          # val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
+
+          # print('-----------------------')
+          # print('Epoch', t)
+          # print('Total Cost:', total_cost)
+          # print('Training Accuracy:', train_acc)
+          # print('Validation Accuracy:', val_acc)
+          # print('-----------------------')
+
+          # with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+          #     fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
+          #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+          #     writer.writerow({'Epoch':t, 
+          #                      'Total Cost':total_cost,
+          #                      'Train Acc':train_acc,
+          #                      'Validation Acc':val_acc})
 
 
-    test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
-    test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
-    print("Testing Accuracy:", test_acc)
+        step += 1
+
+    except tf.errors.OutOfRangeError:
+      # test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
+      # test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
+      # print("Testing Accuracy:", test_acc)
+
+      print('Done training for %d epochs, %d steps.' % (FLAGS.epochs, step))
+
+    finally:
+      # When done, ask the threads to stop.
+      coord.request_stop()
+
+    # Wait for threads to finish.
+    coord.join(threads)
+    sess.close()

@@ -57,12 +57,13 @@ def add_gradient_noise(t, stddev=1e-3, name=None):
 
 class MemN2N(object):
     """End-To-End Memory Network."""
-    def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
+    def __init__(self, dataset, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
+        num_epochs=100,
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
         use_proj=False,
-        rnn_input_keep_prob=0.8,
+        rnn_input_keep_prob=1.0,
         rnn_output_keep_prob=1.0,
         initializer=tf.random_normal_initializer(stddev=0.1),
         optimizer=tf.train.AdamOptimizer(learning_rate=1e-2),
@@ -109,6 +110,7 @@ class MemN2N(object):
         self._sentence_size = sentence_size
         self._memory_size = memory_size
         self._embedding_size = embedding_size
+        self._num_epochs = num_epochs
         self._hops = hops
         self._max_grad_norm = max_grad_norm
         self._nonlin = nonlin
@@ -119,7 +121,7 @@ class MemN2N(object):
         self._name = name
         self._use_proj = use_proj
 
-        self._build_inputs()
+        self._build_inputs(dataset)
         self._build_vars()
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
@@ -144,28 +146,52 @@ class MemN2N(object):
         train_op = self._opt.apply_gradients(nil_grads_and_vars, name="train_op")
 
         # predict ops
-        predict_op = tf.argmax(logits, 1, name="predict_op")
-        predict_proba_op = tf.nn.softmax(logits, name="predict_proba_op")
-        predict_log_proba_op = tf.log(predict_proba_op, name="predict_log_proba_op")
+        # predict_op = tf.argmax(logits, 1, name="predict_op")
+        # predict_proba_op = tf.nn.softmax(logits, name="predict_proba_op")
+        # predict_log_proba_op = tf.log(predict_proba_op, name="predict_log_proba_op")
 
         # assign ops
         self.loss_op = loss_op
-        self.predict_op = predict_op
-        self.predict_proba_op = predict_proba_op
-        self.predict_log_proba_op = predict_log_proba_op
+        # self.predict_op = predict_op
+        # self.predict_proba_op = predict_proba_op
+        # self.predict_log_proba_op = predict_log_proba_op
         self.train_op = train_op
 
-        init_op = tf.initialize_all_variables()
+        init_op = tf.global_variables_initializer()
         self._sess = session
         self._sess.run(init_op)
 
+        self._sess.run(self._stories_input.initializer,
+                       feed_dict={self._stories_initializer: dataset['stories']})
+        self._sess.run(self._stories_len_input.initializer,
+                       feed_dict={self._stories_len_initializer: dataset['stories_len']})
+        self._sess.run(self._queries_input.initializer,
+                       feed_dict={self._queries_initializer: dataset['queries']})
+        self._sess.run(self._queries_len_input.initializer,
+                       feed_dict={self._queries_len_initializer: dataset['queries_len']})
+        self._sess.run(self._answers_input.initializer,
+                       feed_dict={self._answers_initializer: dataset['answers']})
 
-    def _build_inputs(self):
-        self._stories = tf.placeholder(tf.int32, [None, self._memory_size, self._sentence_size], name="stories")
-        self._stories_len = tf.placeholder(tf.int32, [None, self._memory_size], name="stories_lens")
-        self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
-        self._queries_len = tf.placeholder(tf.int32, [None], name="queries_lens")
-        self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
+    def _build_inputs(self, dataset):
+        self._stories_initializer = tf.placeholder(tf.int32, dataset['stories'].shape, name="stories")
+        self._stories_len_initializer = tf.placeholder(tf.int32, dataset['stories_len'].shape, name="stories_lens")
+        self._queries_initializer = tf.placeholder(tf.int32, dataset['queries'].shape, name="queries")
+        self._queries_len_initializer = tf.placeholder(tf.int32, dataset['queries_len'].shape, name="queries_lens")
+        self._answers_initializer = tf.placeholder(tf.int32, dataset['answers'].shape, name="answers")        
+
+        self._stories_input = tf.Variable(self._stories_initializer, trainable=False, collections=[])
+        self._stories_len_input = tf.Variable(self._stories_len_initializer, trainable=False, collections=[])
+        self._queries_input = tf.Variable(self._queries_initializer, trainable=False, collections=[])
+        self._queries_len_input = tf.Variable(self._queries_len_initializer, trainable=False, collections=[])
+        self._answers_input = tf.Variable(self._answers_initializer, trainable=False, collections=[])        
+
+        story, story_len, query, query_len, answer = tf.train.slice_input_producer(
+            [self._stories_input, self._stories_len_input, self._queries_input, self._queries_len_input, self._answers_input], 
+            num_epochs=self._num_epochs)
+
+        self._stories, self._stories_len, self._queries, self._queries_len, self._answers = tf.train.batch(
+            [story, story_len, query, query_len, answer],
+            batch_size=self._batch_size)
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -315,7 +341,7 @@ class MemN2N(object):
         with tf.variable_scope('hop_{}'.format(self._hops)):
             return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, s_lens, queries, q_lens, answers):
+    def batch_fit(self):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -326,47 +352,46 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._stories: stories, self._stories_len: s_lens, 
-                     self._queries: queries, self._queries_len: q_lens, 
-                     self._answers: answers}
-        loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
+        import ipdb
+        ipdb.set_trace()
+        loss, _ = self._sess.run([self.loss_op, self.train_op])
         return loss
 
-    def predict(self, stories, s_lens, queries, q_lens):
-        """Predicts answers as one-hot encoding.
+    # def predict(self, stories, s_lens, queries, q_lens):
+    #     """Predicts answers as one-hot encoding.
 
-        Args:
-            stories: Tensor (None, memory_size, sentence_size)
-            queries: Tensor (None, sentence_size)
+    #     Args:
+    #         stories: Tensor (None, memory_size, sentence_size)
+    #         queries: Tensor (None, sentence_size)
 
-        Returns:
-            answers: Tensor (None, vocab_size)
-        """
-        feed_dict = {self._stories: stories, self._stories_len: s_lens, 
-                     self._queries: queries, self._queries_len: q_lens} 
-        return self._sess.run(self.predict_op, feed_dict=feed_dict)
+    #     Returns:
+    #         answers: Tensor (None, vocab_size)
+    #     """
+    #     feed_dict = {self._stories: stories, self._stories_len: s_lens, 
+    #                  self._queries: queries, self._queries_len: q_lens} 
+    #     return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
-    def predict_proba(self, stories, queries):
-        """Predicts probabilities of answers.
+    # def predict_proba(self, stories, queries):
+    #     """Predicts probabilities of answers.
 
-        Args:
-            stories: Tensor (None, memory_size, sentence_size)
-            queries: Tensor (None, sentence_size)
+    #     Args:
+    #         stories: Tensor (None, memory_size, sentence_size)
+    #         queries: Tensor (None, sentence_size)
 
-        Returns:
-            answers: Tensor (None, vocab_size)
-        """
-        feed_dict = {self._stories: stories, self._queries: queries}
-        return self._sess.run(self.predict_proba_op, feed_dict=feed_dict)
+    #     Returns:
+    #         answers: Tensor (None, vocab_size)
+    #     """
+    #     feed_dict = {self._stories: stories, self._queries: queries}
+    #     return self._sess.run(self.predict_proba_op, feed_dict=feed_dict)
 
-    def predict_log_proba(self, stories, queries):
-        """Predicts log probabilities of answers.
+    # def predict_log_proba(self, stories, queries):
+    #     """Predicts log probabilities of answers.
 
-        Args:
-            stories: Tensor (None, memory_size, sentence_size)
-            queries: Tensor (None, sentence_size)
-        Returns:
-            answers: Tensor (None, vocab_size)
-        """
-        feed_dict = {self._stories: stories, self._queries: queries}
-        return self._sess.run(self.predict_log_proba_op, feed_dict=feed_dict)
+    #     Args:
+    #         stories: Tensor (None, memory_size, sentence_size)
+    #         queries: Tensor (None, sentence_size)
+    #     Returns:
+    #         answers: Tensor (None, vocab_size)
+    #     """
+    #     feed_dict = {self._stories: stories, self._queries: queries}
+    #     return self._sess.run(self.predict_log_proba_op, feed_dict=feed_dict)
