@@ -18,6 +18,8 @@ import csv
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
+tf.flags.DEFINE_float("rnn_input_keep_prob", 1.0, "Percentage of inputs to keep for input rnn dropout.")
+tf.flags.DEFINE_float("rnn_output_keep_prob", 1.0, "Percentage of inputs to keep for input rnn dropout.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
@@ -77,6 +79,9 @@ print("Training Size", n_train)
 print("Validation Size", n_val)
 print("Testing Size", n_test)
 
+with open('results_personal/dynamic_rnn_qm/train_log_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+    csvfile.write('Dropout In: {}, Drouput Out: {}\n'.format(FLAGS.rnn_input_keep_prob, FLAGS.rnn_output_keep_prob))
+
 train_labels = np.argmax(trainA, axis=1)
 test_labels = np.argmax(testA, axis=1)
 val_labels = np.argmax(valA, axis=1)
@@ -90,9 +95,16 @@ batches = [(start, end) for start, end in batches]
 # Get list of ordered batches for eval before shuffling
 train_eval_batches = copy.copy(batches)
 
+val_eval_batches = zip(range(0, n_val-batch_size, batch_size), range(batch_size, n_val, batch_size))
+val_eval_batches = [(start, end) for start, end in val_eval_batches]
+
+test_eval_batches = zip(range(0, n_test-batch_size, batch_size), range(batch_size, n_test, batch_size))
+test_eval_batches = [(start, end) for start, end in test_eval_batches]
+
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, rnn_input_keep_prob=FLAGS.rnn_input_keep_prob,
+                   rnn_output_keep_prob=FLAGS.rnn_output_keep_prob, optimizer=optimizer)
     for t in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
@@ -117,7 +129,15 @@ with tf.Session() as sess:
                 pred = model.predict(s, s_lens, q, q_lens)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valS_lens, valQ, valQ_lens)
+            val_preds = []
+            for start, end in tqdm(val_eval_batches, desc='Val Eval: '):
+                s = valS[start:end]
+                s_lens = valS_lens[start:end]
+                q = valQ[start:end]
+                q_lens = valQ_lens[start:end]
+                pred = model.predict(s, s_lens, q, q_lens)
+                val_preds += list(pred)
+
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
             val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
 
@@ -128,7 +148,7 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+            with open('results_personal/dynamic_rnn_qm/train_log_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
                 fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -138,6 +158,17 @@ with tf.Session() as sess:
                                  'Validation Acc':val_acc})
 
 
-    test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
+    test_preds = []
+    for start, end in tqdm(test_eval_batches, desc='Test Eval: '):
+        s = testS[start:end]
+        s_lens = testS_lens[start:end]
+        q = testQ[start:end]
+        q_lens = testQ_lens[start:end]
+        pred = model.predict(s, s_lens, q, q_lens)
+        test_preds += list(pred)
+
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
+    with open('results_personal/dynamic_rnn_qm/train_log_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+        csvfile.write('Test Acc: {}\n'.format(test_acc))
+
