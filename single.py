@@ -21,7 +21,7 @@ tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 2, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
-tf.flags.DEFINE_integer("epochs", 50, "Number of epochs to train for.")
+tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
 tf.flags.DEFINE_integer("embedding_size", 40, "Embedding size for embedding matrices.")
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
 tf.flags.DEFINE_integer("task_id", 1, "bAbI task id, 1 <= id <= 20")
@@ -87,8 +87,15 @@ optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FL
 
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
+
 # Get list of ordered batches for eval before shuffling
 train_eval_batches = copy.copy(batches)
+
+val_batches = zip(range(0, n_val-batch_size, batch_size), range(batch_size, n_val, batch_size))
+val_batches = [(start, end) for start, end in val_batches]
+
+test_batches = zip(range(0, n_test-batch_size, batch_size), range(batch_size, n_test, batch_size))
+test_batches = [(start, end) for start, end in test_batches]
 
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
@@ -121,7 +128,16 @@ with tf.Session() as sess:
                 pred = model.predict(s, s_lens, q, q_lens)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valS_lens, valQ, valQ_lens)
+            val_preds = []
+            #for start in range(0, n_train, batch_size):
+            for start, end in tqdm(val_batches, desc='Val Eval: '):
+                s = valS[start:end]
+                s_lens = valS_lens[start:end]
+                q = valQ[start:end]
+                q_lens = valQ_lens[start:end]
+                pred = model.predict(s, s_lens, q, q_lens)
+                val_preds += list(pred)
+
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
             val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
 
@@ -132,7 +148,7 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+            with open('results_personal/rnn_adj_ae_qm/train_log_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
                 fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -142,6 +158,15 @@ with tf.Session() as sess:
                                  'Validation Acc':val_acc})
 
 
-    test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
+    test_preds = []
+    #for start in range(0, n_train, batch_size):
+    for start, end in tqdm(test_batches, desc='Test Eval: '):
+        s = testS[start:end]
+        s_lens = testS_lens[start:end]
+        q = testQ[start:end]
+        q_lens = testQ_lens[start:end]
+        pred = model.predict(s, s_lens, q, q_lens)
+        test_preds += list(pred)
+
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)

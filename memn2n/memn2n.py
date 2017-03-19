@@ -206,7 +206,7 @@ class MemN2N(object):
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
 
         # Let B = A_1
-        with tf.variable_scope(rnn_A_scopes[0], reuse=None):
+        with tf.variable_scope('RNN_Q', reuse=None):
             # Encode Query with GRU & Take last state as u_0
             q_cell = rnn_cell.GRUCell(self._embedding_size)
             # Add dropout
@@ -253,7 +253,11 @@ class MemN2N(object):
             else:
                 with tf.variable_scope('hop_{}'.format(hopn - 1)):
                     m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
-                
+            
+            # Duplicate u[-1] so we can append it to each rnn input by concat
+            u_dupe = tf.reshape(tf.tile(u[-1], [self._sentence_size, 1]), 
+                                [self._batch_size, self._sentence_size, self._embedding_size])
+
             # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
             # We need to feed into rnn individual sentence at a time
             m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
@@ -272,12 +276,15 @@ class MemN2N(object):
                                             output_keep_prob=self._rnn_output_keep_prob)
 
             for i, sentence in enumerate(m_emb_A_sentences):
-                reuse = True
+                reuse = None if ((i == 0) and (hopn == 0)) else True
+
                 # Use adj-weight sharing 
                 with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
                     m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
-                    m_states = rnn.dynamic_rnn(m_cell, sentence, initial_state=m_init_state,
+                    sentence_u = tf.concat(2, [sentence, u_dupe])
+
+                    m_states = rnn.dynamic_rnn(m_cell, sentence_u, initial_state=m_init_state,
                                                sequence_length=stories_lens[:, i])
                     m_A_states_all_sent.append(m_states)
 
@@ -340,7 +347,9 @@ class MemN2N(object):
 
                 # Again use adj-weight sharing for rnn weights
                 with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
-                    c_states = rnn.dynamic_rnn(c_cell, sentence, initial_state=c_init_state,
+                    sentence_u = tf.concat(2, [sentence, u_dupe])
+
+                    c_states = rnn.dynamic_rnn(c_cell, sentence_u, initial_state=c_init_state,
                                                sequence_length=stories_lens[:, i])
                     m_C_states_all_sent.append(c_states[-1])
 
