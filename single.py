@@ -50,6 +50,8 @@ vocab_size = len(word_idx) + 1 # +1 for nil word
 sentence_size = max(query_size, sentence_size) # for the position
 sentence_size += 1  # +1 for time words
 
+key_length = value_length = query_length = sentence_size
+
 print("Longest sentence length", sentence_size)
 print("Longest story length", max_story_size)
 print("Average story length", mean_story_size)
@@ -83,7 +85,7 @@ batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_trai
 batches = [(start, end) for start, end in batches]
 
 with tf.Session() as sess:
-    model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
+    model = MemN2N(batch_size, vocab_size, key_length, value_length, query_length, memory_size, FLAGS.embedding_size, session=sess,
                    hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
     for t in range(1, FLAGS.epochs+1):
         # Stepped learning rate
@@ -99,7 +101,7 @@ with tf.Session() as sess:
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
-            cost_t = model.batch_fit(s, q, a, lr)
+            cost_t = model.batch_fit(s, s, q, a, lr)
             total_cost += cost_t
 
         if t % FLAGS.evaluation_interval == 0:
@@ -108,10 +110,10 @@ with tf.Session() as sess:
                 end = start + batch_size
                 s = trainS[start:end]
                 q = trainQ[start:end]
-                pred = model.predict(s, q)
+                pred = model.predict(s, s, q)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valQ)
+            val_preds = model.predict(valS, valS, valQ)
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels)
             val_acc = metrics.accuracy_score(val_preds, val_labels)
 
@@ -122,6 +124,6 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-    test_preds = model.predict(testS, testQ)
+    test_preds = model.predict(testS, testS, testQ)
     test_acc = metrics.accuracy_score(test_preds, test_labels)
     print("Testing Accuracy:", test_acc)

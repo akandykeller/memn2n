@@ -55,7 +55,7 @@ def add_gradient_noise(t, stddev=1e-3, name=None):
 
 class MemN2N(object):
     """End-To-End Memory Network."""
-    def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
+    def __init__(self, batch_size, vocab_size, key_length, value_length, query_length, memory_size, embedding_size,
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
@@ -100,7 +100,9 @@ class MemN2N(object):
 
         self._batch_size = batch_size
         self._vocab_size = vocab_size
-        self._sentence_size = sentence_size
+        self._key_length = key_length
+        self._value_length = value_length
+        self._query_length = query_length
         self._memory_size = memory_size
         self._embedding_size = embedding_size
         self._hops = hops
@@ -114,10 +116,12 @@ class MemN2N(object):
 
         self._opt = tf.train.GradientDescentOptimizer(learning_rate=self._lr)
 
-        self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
+        self._key_encoding = tf.constant(encoding(self._key_length, self._embedding_size), name="encoding")
+        self._value_encoding = tf.constant(encoding(self._value_length, self._embedding_size), name="encoding")
+        self._query_encoding = tf.constant(encoding(self._query_length, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
+        logits = self._inference(self._mem_keys, self._mem_values, self._queries) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -154,8 +158,10 @@ class MemN2N(object):
 
 
     def _build_inputs(self):
-        self._stories = tf.placeholder(tf.int32, [None, self._memory_size, self._sentence_size], name="stories")
-        self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
+        self._mem_keys = tf.placeholder(tf.int32, [None, self._memory_size, self._key_length], name="mem_keys")
+        self._mem_values = tf.placeholder(tf.int32, [None, self._memory_size, self._value_length], name="mem_values")
+
+        self._queries = tf.placeholder(tf.int32, [None, self._query_length], name="queries")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
 
@@ -181,22 +187,22 @@ class MemN2N(object):
 
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
-    def _inference(self, stories, queries):
+    def _inference(self, mem_keys, mem_values, queries):
         with tf.variable_scope(self._name):
             # Use A_1 for thee question embedding as per Adjacent Weight Sharing
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
-            u_0 = tf.reduce_sum(q_emb * self._encoding, 1)
+            u_0 = tf.reduce_sum(q_emb * self._query_encoding, 1)
             u = [u_0]
 
             for hopn in range(self._hops):
                 if hopn == 0:
-                    m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
-                    m_A = tf.reduce_sum(m_emb_A * self._encoding, 2)
+                    m_emb_A = tf.nn.embedding_lookup(self.A_1, mem_keys)
+                    m_A = tf.reduce_sum(m_emb_A * self._key_encoding, 2)
 
                 else:
                     with tf.variable_scope('hop_{}'.format(hopn - 1)):
-                        m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
-                        m_A = tf.reduce_sum(m_emb_A * self._encoding, 2)
+                        m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], mem_keys)
+                        m_A = tf.reduce_sum(m_emb_A * self._key_encoding, 2)
 
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
@@ -208,9 +214,8 @@ class MemN2N(object):
                 probs_temp = tf.transpose(tf.expand_dims(probs, -1), [0, 2, 1])
 
                 with tf.variable_scope('hop_{}'.format(hopn)):
-                    m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
-                m_C = tf.reduce_sum(m_emb_C * self._encoding, 2)
-
+                    m_emb_C = tf.nn.embedding_lookup(self.C[hopn], mem_values)
+                m_C = tf.reduce_sum(m_emb_C * self._value_encoding, 2)
 
                 c_temp = tf.transpose(m_C, [0, 2, 1])
                 o_k = tf.reduce_sum(c_temp * probs_temp, 2)
@@ -230,7 +235,7 @@ class MemN2N(object):
             with tf.variable_scope('hop_{}'.format(self._hops)):
                 return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, queries, answers, learning_rate):
+    def batch_fit(self, mem_keys, mem_values, queries, answers, learning_rate):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -241,21 +246,16 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate}
+        feed_dict = {self._mem_keys: mem_keys, 
+                     self._mem_values: mem_values,
+                     self._queries: queries, 
+                     self._answers: answers, 
+                     self._lr: learning_rate}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
-
-        # print "q_emb:  " 
-        # print "***"*100
-        # print q_emb
-        # print "u_0:  " 
-        # print "***"*100
-        # print u_0
-        # print "***"*100
-        # print "***"*100
         
         return loss
 
-    def predict(self, stories, queries):
+    def predict(self, mem_keys, mem_values, queries):
         """Predicts answers as one-hot encoding.
 
         Args:
@@ -265,10 +265,10 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._mem_keys: mem_keys, self._mem_values: mem_values, self._queries: queries}
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
-    def predict_proba(self, stories, queries):
+    def predict_proba(self, mem_keys, mem_values, queries):
         """Predicts probabilities of answers.
 
         Args:
@@ -278,10 +278,10 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._mem_keys: mem_keys, self._mem_values: mem_values, self._queries: queries}
         return self._sess.run(self.predict_proba_op, feed_dict=feed_dict)
 
-    def predict_log_proba(self, stories, queries):
+    def predict_log_proba(self, mem_keys, mem_values, queries):
         """Predicts log probabilities of answers.
 
         Args:
@@ -290,5 +290,5 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._mem_keys: mem_keys, self._mem_values: mem_values, self._queries: queries}
         return self._sess.run(self.predict_log_proba_op, feed_dict=feed_dict)
