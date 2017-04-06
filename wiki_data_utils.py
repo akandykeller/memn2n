@@ -299,10 +299,12 @@ def vectorize_data(docs, questions, ent_idx, word_idx, q_hash, memory_size, key_
         lq = max(0, query_length - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
 
-        y = np.zeros(len(ent_idx) + 1) # 0 is reserved for nil word
+        # y = np.zeros(len(ent_idx) + 1) # 0 is reserved for nil word
+        y = []
         for a in answer:
             try:
-                y[ent_idx[a]] = 1
+                y.append(ent_idx[a])
+                # y[ent_idx[a]] = 1
             except:
                 print("Weird...")
                 print(a)
@@ -312,6 +314,12 @@ def vectorize_data(docs, questions, ent_idx, word_idx, q_hash, memory_size, key_
         Q.append(q)
         A.append(y)
     return np.array(S), np.array(Q), np.array(A)
+
+
+def multi_acc_score(y_preds, y_true):
+    correct_preds = [yp in yt for yp, yt in zip(y_preds, y_true)]
+    return float(np.mean(correct_preds))
+
 
 # def tokenize(sent):
 #     '''Return the tokens of a sentence including punctuation.

@@ -164,7 +164,7 @@ class MemN2N(object):
         self._mem_values = tf.placeholder(tf.int32, [None, self._memory_size, self._value_length], name="mem_values")
 
         self._queries = tf.placeholder(tf.int32, [None, self._query_length], name="queries")
-        self._answers = tf.placeholder(tf.int32, [None, self._num_entities], name="answers")
+        self._answers = tf.placeholder(tf.float32, [None, self._num_entities], name="answers")
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
 
     def _build_vars(self):
