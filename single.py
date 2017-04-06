@@ -3,7 +3,7 @@ Download tasks from facebook.ai/babi """
 from __future__ import absolute_import
 from __future__ import print_function
 
-from data_utils import load_task, vectorize_data
+from wiki_data_utils import load_wiki, vectorize_data, get_word_idx, get_max_lens, build_hash
 from sklearn import cross_validation, metrics
 from memn2n import MemN2N
 from itertools import chain
@@ -11,58 +11,120 @@ from six.moves import range, reduce
 
 import tensorflow as tf
 import numpy as np
+import pickle
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
 tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
-tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
+tf.flags.DEFINE_integer("evaluation_interval", 1, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
 tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
 tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.")
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
-tf.flags.DEFINE_integer("task_id", 1, "bAbI task id, 1 <= id <= 20")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
-tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en/", "Directory containing bAbI tasks")
+tf.flags.DEFINE_string("data_dir", "movieqa/", "Directory containing movie QA dataset")
+tf.flags.DEFINE_string("processed_data_dir", None, "Directory containing processed movie QA dataset")
+tf.flags.DEFINE_string("save_processed_data", True, "Flag to determine if data should be saved agter preprocessing")
+tf.flags.DEFINE_string("max_key_len", 50, "Clip sentences to this length")
+
 FLAGS = tf.flags.FLAGS
 
-print("Started Task:", FLAGS.task_id)
+if not FLAGS.processed_data_dir:
+    print("Loading Wiki Data")
+    # docs, questions, ent_lists = load_wiki(FLAGS.data_dir)
+    # re_list, entities, ent_rev, ent_idx = ent_lists
 
-# task data
-train, test = load_task(FLAGS.data_dir, FLAGS.task_id)
-data = train + test
+    # print("Creating Word Index")
+    # word_idx = get_word_idx(docs, questions)
+    # key_length, value_length, query_length = get_max_lens(docs, questions, FLAGS.max_key_len)
 
-vocab = sorted(reduce(lambda x, y: x | y, (set(list(chain.from_iterable(s)) + q + a) for s, q, a in data)))
-word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
+    # print("Building Hash")
+    # train_hash, dev_hash, test_hash = build_hash(docs, questions, word_idx)
 
-max_story_size = max(map(len, (s for s, _, _ in data)))
-mean_story_size = int(np.mean([ len(s) for s, _, _ in data ]))
-sentence_size = max(map(len, chain.from_iterable(s for s, _, _ in data)))
-query_size = max(map(len, (q for _, q, _ in data)))
-memory_size = min(FLAGS.memory_size, max_story_size)
+    # memory_size = min(FLAGS.memory_size, max(map(len, train_hash)))
+    # vocab_size = len(word_idx) + 1 # +1 for nil word
 
-# Add time words/indexes
-for i in range(memory_size):
-    word_idx['time{}'.format(i+1)] = 'time{}'.format(i+1)
+    # print("Longest key length", key_length)
+    # print("Longest value length", value_length)
+    # print("Longest query length", query_length)
+    # print("Vocab Size", vocab_size)
+    # print("Memory Size", memory_size)
+    # print("Mean hash size", np.mean(map(len, train_hash)))
+    # print("Max hash size", np.max(map(len, train_hash)))
+    # print("Min hash size", np.min(map(len, train_hash)))
+    # print("Number of Entitites", len(entities))
+    
+    # if FLAGS.save_processed_data:
+    #     with open('processed_data/word_idx.pkl', 'w') as f:
+    #         pickle.dump(word_idx, f)
 
-vocab_size = len(word_idx) + 1 # +1 for nil word
-sentence_size = max(query_size, sentence_size) # for the position
-sentence_size += 1  # +1 for time words
+    #     with open('processed_data/load_wiki.pkl', 'w') as f:
+    #         pickle.dump((docs, questions, ent_lists), f)
+        
+    #     with open('processed_data/hash.pkl', 'w') as f:
+    #         pickle.dump((train_hash, dev_hash, test_hash), f)
 
-key_length = value_length = query_length = sentence_size
+    with open('processed_data/word_idx.pkl', 'r') as f:
+        word_idx = pickle.load(f)
 
-print("Longest sentence length", sentence_size)
-print("Longest story length", max_story_size)
-print("Average story length", mean_story_size)
+    with open('processed_data/load_wiki.pkl', 'r') as f:
+        docs, questions, ent_lists = pickle.load(f)
+    key_length, value_length, query_length = get_max_lens(docs, questions, FLAGS.max_key_len)
+    re_list, entities, ent_rev, ent_idx = ent_lists
 
-# train/validation/test sets
-S, Q, A = vectorize_data(train, word_idx, sentence_size, memory_size)
-trainS, valS, trainQ, valQ, trainA, valA = cross_validation.train_test_split(S, Q, A, test_size=.1, random_state=FLAGS.random_state)
-testS, testQ, testA = vectorize_data(test, word_idx, sentence_size, memory_size)
+    with open('processed_data/hash.pkl', 'r') as f:
+        train_hash, dev_hash, test_hash = pickle.load(f)
+    
+    memory_size = min(FLAGS.memory_size, max(map(len, train_hash)))
+    vocab_size = len(word_idx) + 1 # +1 for nil word
+
+    print("Vectorizing data")
+    trainS, trainQ, trainA = vectorize_data(docs, questions[0], ent_idx, word_idx, train_hash, memory_size, key_length, query_length)
+    valS, valQ, valA = vectorize_data(docs, questions[1], ent_idx, word_idx, dev_hash, memory_size, key_length, query_length)
+    testS, testQ, testA = vectorize_data(docs, questions[2], ent_idx, word_idx, test_hash, memory_size, key_length, query_length)
+
+    if FLAGS.save_processed_data:
+        if not FLAGS.processed_data_dir:
+            save_dir = 'processed_data/'
+        else:
+            save_dir = FLAGS.processed_data_dir
+
+        print("Data processing complete. Saving to {}.".format(save_dir))
+
+        with open(save_dir + 'train.pkl', 'w') as f:
+            pickle.dump((trainS, trainQ, trainA), f)
+        
+        with open(save_dir + 'val.pkl', 'w') as f:
+            pickle.dump((valS, valQ, valA), f)
+        
+        with open(save_dir + 'test.pkl', 'w') as f:
+            pickle.dump((testS, testQ, testA), f)
+
+else:
+    print("Loading saved data from: {}".format(FLAGS.processed_data_dir))
+
+    with open(FLAGS.processed_data_dir + 'train.pkl', 'r') as f:
+        trainS, trainQ, trainA = pickle.load(f)
+    
+    with open(FLAGS.processed_data_dir + 'val.pkl', 'r') as f:
+        valS, valQ, valA = pickle.load(f)
+    
+    with open(FLAGS.processed_data_dir + 'test.pkl', 'r') as f:
+        testS, testQ, testA = pickle.load(f)
+
+    with open(FLAGS.processed_data_dir + 'word_idx.pkl', 'r') as f:
+        word_idx = pickle.load(f)
+
+    memory_size = trainS.shape[1]
+    key_length = value_length = trainS.shape[2]
+    query_length = trainQ.shape[1]
+    vocab_size = len(word_idx) + 1
+
+num_entities = trainA.shape[1]
 
 print(testS[0])
-
 print("Training set shape", trainS.shape)
 
 # params
@@ -74,6 +136,7 @@ print("Training Size", n_train)
 print("Validation Size", n_val)
 print("Testing Size", n_test)
 
+# There can be multiple labels for an answer, figure this out. 
 train_labels = np.argmax(trainA, axis=1)
 test_labels = np.argmax(testA, axis=1)
 val_labels = np.argmax(valA, axis=1)
@@ -85,8 +148,8 @@ batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_trai
 batches = [(start, end) for start, end in batches]
 
 with tf.Session() as sess:
-    model = MemN2N(batch_size, vocab_size, key_length, value_length, query_length, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
+    model = MemN2N(batch_size, vocab_size, key_length, value_length, query_length, memory_size, FLAGS.embedding_size, 
+                   num_entities, session=sess, hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
     for t in range(1, FLAGS.epochs+1):
         # Stepped learning rate
         if t - 1 <= FLAGS.anneal_stop_epoch:

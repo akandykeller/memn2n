@@ -55,7 +55,8 @@ def add_gradient_noise(t, stddev=1e-3, name=None):
 
 class MemN2N(object):
     """End-To-End Memory Network."""
-    def __init__(self, batch_size, vocab_size, key_length, value_length, query_length, memory_size, embedding_size,
+    def __init__(self, batch_size, vocab_size, key_length, value_length, 
+                 query_length, memory_size, embedding_size, num_entities,
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
@@ -105,6 +106,7 @@ class MemN2N(object):
         self._query_length = query_length
         self._memory_size = memory_size
         self._embedding_size = embedding_size
+        self._num_entities = num_entities
         self._hops = hops
         self._max_grad_norm = max_grad_norm
         self._nonlin = nonlin
@@ -162,7 +164,7 @@ class MemN2N(object):
         self._mem_values = tf.placeholder(tf.int32, [None, self._memory_size, self._value_length], name="mem_values")
 
         self._queries = tf.placeholder(tf.int32, [None, self._query_length], name="queries")
-        self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
+        self._answers = tf.placeholder(tf.int32, [None, self._num_entities], name="answers")
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
 
     def _build_vars(self):
@@ -183,7 +185,7 @@ class MemN2N(object):
             # self.H = tf.Variable(self._init([self._embedding_size, self._embedding_size]), name="H")
 
             # Use final C as replacement for W
-            # self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
+            self.W = tf.Variable(self._init([self._embedding_size, self._num_entities]), name="W")
 
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
@@ -233,7 +235,7 @@ class MemN2N(object):
 
             # Use last C for output (transposed)
             with tf.variable_scope('hop_{}'.format(self._hops)):
-                return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
+                return tf.matmul(u_k, self.W)
 
     def batch_fit(self, mem_keys, mem_values, queries, answers, learning_rate):
         """Runs the training algorithm over the passed batch
