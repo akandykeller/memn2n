@@ -8,41 +8,68 @@ from sklearn import cross_validation, metrics
 from memn2n import MemN2N
 from itertools import chain
 from six.moves import range, reduce
+from tqdm import tqdm
+from random import randint
 
 import tensorflow as tf
 import numpy as np
 import pickle
 
-tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
+tf.flags.DEFINE_float("learning_rate", 0.005, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
 tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 1, "Evaluate and print results every x epochs")
+tf.flags.DEFINE_integer("batch_evaluation_interval", 20, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
-tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
-tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.")
-tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
+tf.flags.DEFINE_integer("hops", 2, "Number of hops in the Memory Network.")
+tf.flags.DEFINE_integer("epochs", 500, "Number of epochs to train for.")
+tf.flags.DEFINE_integer("embedding_size", 500, "Embedding size for embedding matrices.")
+tf.flags.DEFINE_integer("memory_size", 1000, "Maximum size of memory.")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
 tf.flags.DEFINE_string("data_dir", "movieqa/", "Directory containing movie QA dataset")
-tf.flags.DEFINE_string("processed_data_dir", None, "Directory containing processed movie QA dataset")
-tf.flags.DEFINE_string("save_processed_data", True, "Flag to determine if data should be saved agter preprocessing")
-tf.flags.DEFINE_string("max_key_len", 50, "Clip sentences to this length")
+tf.flags.DEFINE_string("processed_data_dir", 'processed_data/', "Directory containing processed movie QA dataset")
+tf.flags.DEFINE_boolean("save_processed_data", True, "Flag to determine if data should be saved agter preprocessing")
+tf.flags.DEFINE_integer("max_key_len", 100, "Clip sentences to this length")
+tf.flags.DEFINE_boolean("reprocess_data", False, "Flag to load or reprocess data")
+tf.flags.DEFINE_boolean("reprocess_raw", False, "Flag to load or reprocess data from raw")
 
 FLAGS = tf.flags.FLAGS
 
-if not FLAGS.processed_data_dir:
-    print("Loading Wiki Data")
-    docs, questions, ent_lists = load_wiki(FLAGS.data_dir)
-    re_list, entities, ent_rev, ent_idx = ent_lists
+if FLAGS.reprocess_data:
+    if FLAGS.reprocess_raw:
+        print("Reprocessing raw data from scratch...")
+        print("Loading Wiki Data")
+        docs, questions, ent_lists = load_wiki(FLAGS.data_dir)
 
-    print("Creating Word Index")
-    word_idx = get_word_idx(docs, questions)
+        print("Creating Word Index")
+        word_idx = get_word_idx(docs, questions)
+
+        print("Building Hash")
+        train_hash, dev_hash, test_hash = build_hash(docs, questions, word_idx)
+        
+        if FLAGS.save_processed_data:
+            with open(FLAGS.processed_data_dir + 'word_idx.pkl', 'w') as f:
+                pickle.dump(word_idx, f)
+
+            with open(FLAGS.processed_data_dir + 'load_wiki.pkl', 'w') as f:
+                pickle.dump((docs, questions, ent_lists), f)
+            
+            with open(FLAGS.processed_data_dir + 'hash.pkl', 'w') as f:
+                pickle.dump((train_hash, dev_hash, test_hash), f)
+    else:
+        print("Loading preprocessed raw data from {}: word_idx, docs, questions, ent_lists, hash".format(FLAGS.processed_data_dir))
+        with open(FLAGS.processed_data_dir + 'word_idx.pkl', 'r') as f:
+            word_idx = pickle.load(f)
+
+        with open(FLAGS.processed_data_dir + 'load_wiki.pkl', 'r') as f:
+            docs, questions, ent_lists = pickle.load(f)
+
+        with open(FLAGS.processed_data_dir + 'hash.pkl', 'r') as f:
+            train_hash, dev_hash, test_hash = pickle.load(f)
+    
     key_length, value_length, query_length = get_max_lens(docs, questions, FLAGS.max_key_len)
-
-    print("Building Hash")
-    train_hash, dev_hash, test_hash = build_hash(docs, questions, word_idx)
-
+    re_list, entities, ent_rev, ent_idx = ent_lists
     memory_size = min(FLAGS.memory_size, max(map(len, train_hash)))
     vocab_size = len(word_idx) + 1 # +1 for nil word
 
@@ -55,30 +82,6 @@ if not FLAGS.processed_data_dir:
     print("Max hash size", np.max(map(len, train_hash)))
     print("Min hash size", np.min(map(len, train_hash)))
     print("Number of Entitites", len(entities))
-    
-    if FLAGS.save_processed_data:
-        with open('processed_data/word_idx.pkl', 'w') as f:
-            pickle.dump(word_idx, f)
-
-        with open('processed_data/load_wiki.pkl', 'w') as f:
-            pickle.dump((docs, questions, ent_lists), f)
-        
-        with open('processed_data/hash.pkl', 'w') as f:
-            pickle.dump((train_hash, dev_hash, test_hash), f)
-
-    # with open('processed_data/word_idx.pkl', 'r') as f:
-    #     word_idx = pickle.load(f)
-
-    # with open('processed_data/load_wiki.pkl', 'r') as f:
-    #     docs, questions, ent_lists = pickle.load(f)
-    # key_length, value_length, query_length = get_max_lens(docs, questions, FLAGS.max_key_len)
-    # re_list, entities, ent_rev, ent_idx = ent_lists
-
-    # with open('processed_data/hash.pkl', 'r') as f:
-    #     train_hash, dev_hash, test_hash = pickle.load(f)
-    
-    memory_size = min(FLAGS.memory_size, max(map(len, train_hash)))
-    vocab_size = len(word_idx) + 1 # +1 for nil word
 
     print("Vectorizing data Train")
     trainS, trainQ, trainA = vectorize_data(docs, questions[0], ent_idx, word_idx, train_hash, memory_size, key_length, query_length)
@@ -93,41 +96,36 @@ if not FLAGS.processed_data_dir:
     print("testS shape:{}".format(testS.shape))
 
     if FLAGS.save_processed_data:
-        if not FLAGS.processed_data_dir:
-            save_dir = 'processed_data/'
-        else:
-            save_dir = FLAGS.processed_data_dir
-
-        print("Data processing complete. Saving to {}.".format(save_dir))
+        print("Data processing complete. Saving to {}.".format(FLAGS.processed_data_dir))
 
         print("Saving Train")
-        with open(save_dir + 'trainS.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'trainS_1000m.npy', 'w') as f:
             np.save(f, trainS)
 
-        with open(save_dir + 'trainQ.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'trainQ_1000m.npy', 'w') as f:
             np.save(f, trainQ)
 
-        with open(save_dir + 'trainA.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'trainA_1000m.npy', 'w') as f:
             np.save(f, trainA)
         
         print("Saving Val")
-        with open(save_dir + 'valS.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'valS_1000m.npy', 'w') as f:
             np.save(f, valS)
 
-        with open(save_dir + 'valQ.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'valQ_1000m.npy', 'w') as f:
             np.save(f, valQ)
 
-        with open(save_dir + 'valA.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'valA_1000m.npy', 'w') as f:
             np.save(f, valA)
         
         print("Saving Test")
-        with open(save_dir + 'testS.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'testS_1000m.npy', 'w') as f:
             np.save(f, testS)
 
-        with open(save_dir + 'testQ.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'testQ_1000m.npy', 'w') as f:
             np.save(f, testQ)
 
-        with open(save_dir + 'testA.npy', 'w') as f:
+        with open(FLAGS.processed_data_dir + 'testA_1000m.npy', 'w') as f:
             np.save(f, testA)
 
 else:
@@ -143,33 +141,33 @@ else:
     re_list, entities, ent_rev, ent_idx = ent_lists
 
     print("Loading Train")
-    with open(FLAGS.processed_data_dir + 'trainS.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'trainS_1000m.npy', 'r') as f:
         trainS = np.load(f)
 
-    with open(FLAGS.processed_data_dir + 'trainQ.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'trainQ_1000m.npy', 'r') as f:
         trainQ = np.load(f)
 
-    with open(FLAGS.processed_data_dir + 'trainA.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'trainA_1000m.npy', 'r') as f:
         trainA = np.load(f)
     
     print("Loading Val")
-    with open(FLAGS.processed_data_dir + 'valS.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'valS_1000m.npy', 'r') as f:
         valS = np.load(f)
 
-    with open(FLAGS.processed_data_dir + 'valQ.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'valQ_1000m.npy', 'r') as f:
         valQ = np.load(f)
 
-    with open(FLAGS.processed_data_dir + 'valA.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'valA_1000m.npy', 'r') as f:
         valA = np.load(f)
     
     print("Loading Test")
-    with open(FLAGS.processed_data_dir + 'testS.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'testS_1000m.npy', 'r') as f:
         testS = np.load(f)
 
-    with open(FLAGS.processed_data_dir + 'testQ.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'testQ_1000m.npy', 'r') as f:
         testQ = np.load(f)
 
-    with open(FLAGS.processed_data_dir + 'testA.npy', 'r') as f:
+    with open(FLAGS.processed_data_dir + 'testA_1000m.npy', 'r') as f:
         testA = np.load(f)
 
     memory_size = trainS.shape[1]
@@ -215,7 +213,8 @@ with tf.Session() as sess:
 
         np.random.shuffle(batches)
         total_cost = 0.0
-        for start, end in batches:
+        batch_num = 0
+        for start, end in tqdm(batches):
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
@@ -230,8 +229,36 @@ with tf.Session() as sess:
 
             cost_t = model.batch_fit(s, s, q, y, lr)
             total_cost += cost_t
+            batch_num += 1
+
+            if batch_num % FLAGS.batch_evaluation_interval == 0:
+                print("Running Eval.")
+
+                t_start = randint(0, n_train - batch_size)
+                t_end = t_start + batch_size
+                s = trainS[t_start:t_end]
+                q = trainQ[t_start:t_end]
+                train_preds = list(model.predict(s, s, q))
+
+                v_start = randint(0, n_val - batch_size)
+                v_end = v_start + batch_size
+                s = valS[v_start:v_end]
+                q = valQ[v_start:v_end]
+
+                val_preds = model.predict(s, s, q)
+
+                train_acc = multi_acc_score(np.array(train_preds), trainA[t_start:t_end])
+                val_acc = multi_acc_score(val_preds, valA[v_start:v_end])
+
+                print('-----------------------')
+                print('Batch', batch_num)
+                print('Total Cost:', total_cost)
+                print('Training Accuracy:', train_acc)
+                print('Validation Accuracy:', val_acc)
+                print('-----------------------')
 
         if t % FLAGS.evaluation_interval == 0:
+            print("Running Eval.")
             train_preds = []
             for start in range(0, n_train, batch_size):
                 end = start + batch_size
