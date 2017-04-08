@@ -21,6 +21,7 @@ tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
+tf.flags.DEFINE_integer("lm_epochs", 100, "Number of epochs to train for.")
 tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
 tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.")
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
@@ -93,6 +94,24 @@ train_eval_batches = copy.copy(batches)
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
                    hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+    
+    print("Beginning LM Training")
+    for t in range(1, FLAGS.lm_epochs+1):
+        np.random.shuffle(batches)
+        lm_total_cost = 0.0
+        for start, end in tqdm(batches, desc='Epoch {}: '.format(t)):
+            s = trainS[start:end]
+            s_lens = trainS_lens[start:end]
+            q = trainQ[start:end]
+            q_lens = trainQ_lens[start:end]
+            a = trainA[start:end]
+
+            lm_cost = model.batch_lm_fit(s, s_lens, q, q_lens, a)
+            lm_total_cost += lm_cost
+        if t % FLAGS.evaluation_interval == 0:
+            print("Epoch {} -- LM total cost: {}".format(t, lm_total_cost))
+
+    print("Beginning QA training")
     for t in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
@@ -103,8 +122,8 @@ with tf.Session() as sess:
             q_lens = trainQ_lens[start:end]
             a = trainA[start:end]
 
-            cost_t = model.batch_fit(s, s_lens, q, q_lens, a)
-            total_cost += cost_t
+            cost = model.batch_fit(s, s_lens, q, q_lens, a)
+            total_cost += cost
 
         if t % FLAGS.evaluation_interval == 0:
             train_preds = []
@@ -128,7 +147,7 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+            with open('results_personal/rnn_lm/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
                 fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -141,3 +160,5 @@ with tf.Session() as sess:
     test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
+    with open('results_personal/rnn_lm/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as f:
+        f.write("Test Accuracy: {}".format(test_acc))

@@ -60,8 +60,8 @@ class MemN2N(object):
     def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
         hops=3,
         max_grad_norm=40.0,
-        nonlin=None,
-        use_proj=False,
+        nonlin=tf.nn.relu,
+        use_proj=True,
         rnn_input_keep_prob=0.8,
         rnn_output_keep_prob=1.0,
         initializer=tf.random_normal_initializer(stddev=0.1),
@@ -123,17 +123,35 @@ class MemN2N(object):
         self._build_vars()
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
-        # cross entropy
+        # Compute LM Loss
+        q_cost, m_a_costs, m_c_costs = self._lm_inference(self._stories, self._stories_len, self._queries, self._queries_len)
+
+        # LM Loss op
+        lm_loss_op = tf.add(sum(m_c_costs), tf.add(sum(m_a_costs), q_cost))
+
+        # LM Gradient pipeline
+        lm_grads_and_vars = self._opt.compute_gradients(lm_loss_op)
+        lm_grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in lm_grads_and_vars if g is not None]
+        lm_grads_and_vars = [(add_gradient_noise(g), v) for g,v in lm_grads_and_vars]
+        lm_nil_grads_and_vars = []
+        for g, v in lm_grads_and_vars:
+            if v.name in self._nil_vars:
+                lm_nil_grads_and_vars.append((zero_nil_slot(g), v))
+            else:
+                lm_nil_grads_and_vars.append((g, v))
+        lm_train_op = self._opt.apply_gradients(lm_nil_grads_and_vars, name="lm_train_op")
+
+        # cross entropy for answer prediction
         logits = self._inference(self._stories, self._stories_len, self._queries, self._queries_len) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
-        # loss op
+        # QA loss op
         loss_op = cross_entropy_sum
 
-        # gradient pipeline
+        # QA gradient pipeline
         grads_and_vars = self._opt.compute_gradients(loss_op)
-        grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars]
+        grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars if g is not None]
         grads_and_vars = [(add_gradient_noise(g), v) for g,v in grads_and_vars]
         nil_grads_and_vars = []
         for g, v in grads_and_vars:
@@ -150,10 +168,14 @@ class MemN2N(object):
 
         # assign ops
         self.loss_op = loss_op
+        self.lm_loss_op = lm_loss_op
+
         self.predict_op = predict_op
         self.predict_proba_op = predict_proba_op
         self.predict_log_proba_op = predict_log_proba_op
+        
         self.train_op = train_op
+        self.lm_train_op = lm_train_op
 
         init_op = tf.initialize_all_variables()
         self._sess = session
@@ -189,6 +211,137 @@ class MemN2N(object):
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
 
+    def _lm_inference(self, stories, stories_lens, queries, queries_lens):
+        
+        with tf.variable_scope(self._name):
+            q_emb = tf.nn.embedding_lookup(self.A_1, queries)
+
+        # Adjacent weight sharing scheme
+        rnn_A_scopes = ['RNN_A_1', 'RNN_C_1', 'RNN_C_2']
+        rnn_C_scopes = ['RNN_C_1', 'RNN_C_2', 'RNN_C_3']
+        
+        # Layerwise weight sharing scheme
+        # rnn_A_scopes = ['RNN_A_1', 'RNN_A_1', 'RNN_A_2']
+        # rnn_C_scopes = ['RNN_C_1', 'RNN_C_1', 'RNN_C_1']
+        # self._use_proj = True
+
+        # Let B = A_1
+        with tf.variable_scope(rnn_A_scopes[0], reuse=None):
+            q_cell = rnn_cell.GRUCell(self._embedding_size)
+            # Add dropout
+            q_cell = rnn_cell.DropoutWrapper(q_cell,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+            q_init_state = q_cell.zero_state(tf.shape(stories)[0], tf.float32)
+            q_outputs, q_states = rnn.dynamic_rnn(q_cell, q_emb, initial_state=q_init_state,
+                                       sequence_length=queries_lens)
+
+        with tf.variable_scope('Q_cost', reuse=None):
+            # project q_outputs to vocabulary w/ another W
+            q_outputs_flat = tf.reshape(tf.concat(1, q_outputs), (-1, self._embedding_size),
+                                                name="flattened_outputs")
+
+            w_out_q = tf.get_variable("w", (self._embedding_size, self._vocab_size))
+            b_out_q = tf.get_variable("b", self._vocab_size)
+            predicted_q = tf.matmul(q_outputs_flat, w_out_q) + b_out_q
+            q_loss = tf.nn.seq2seq.sequence_loss_by_example([predicted_q], [tf.concat(-1, queries)],
+                                                               [tf.ones(self._batch_size * self._sentence_size)])
+            q_cost = tf.div(tf.reduce_sum(q_loss), self._batch_size, name="cost")
+
+
+        m_a_costs = []
+        m_c_costs = []
+
+        for hopn in range(self._hops):
+            if hopn == 0:
+                with tf.variable_scope(self._name):
+                    m_emb_A = tf.nn.embedding_lookup(self.A_1, stories)
+            else:
+                with tf.variable_scope('hop_{}'.format(hopn - 1)):
+                    m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
+                
+            # m_emb_a is shape (bsz, num_sentences, sentence_length, embedding_size)
+            # We need to feed into rnn individual sentence at a time
+            m_emb_A_sentences = tf.unpack(m_emb_A, axis=1)
+
+            m_cell = rnn_cell.GRUCell(self._embedding_size)
+            m_cell = rnn_cell.DropoutWrapper(m_cell,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
+            m_a_cost = tf.Variable(dtype=tf.float32, initial_value=float(0), trainable=False)
+
+            for i, sentence in enumerate(m_emb_A_sentences):
+                reuse = True
+                # Use adj-weight sharing 
+                with tf.variable_scope(rnn_A_scopes[hopn], reuse=reuse):
+                    m_init_state = m_cell.zero_state(tf.shape(stories)[0], tf.float32)
+
+                    # m_emb_A_seq = tf.unpack(sentence, axis=1)
+                    m_outputs, m_states = rnn.dynamic_rnn(m_cell, sentence, initial_state=m_init_state,
+                                               sequence_length=stories_lens[:, i])
+
+                reuse_lm = None if ((i == 0) and (hopn == 0)) else True
+                with tf.variable_scope(rnn_A_scopes[hopn] + "_cost", reuse=reuse_lm):
+                    # project m_outputs to vocabulary w/ another W
+                    m_outputs_flat = tf.reshape(tf.concat(1, m_outputs), (-1, self._embedding_size))
+
+                    w_out_m = tf.get_variable("w", (self._embedding_size, self._vocab_size))
+                    b_out_m = tf.get_variable("b", self._vocab_size)
+                    predicted_m = tf.matmul(m_outputs_flat, w_out_m) + b_out_m
+                    m_a_loss = tf.nn.seq2seq.sequence_loss_by_example([predicted_m], [tf.concat(-1, stories[:, i])],
+                                                                       [tf.ones(self._batch_size * self._sentence_size)])
+                    m_a_cost += tf.div(tf.reduce_sum(m_a_loss), self._batch_size, name="cost")
+
+            m_a_costs.append(m_a_cost)
+
+
+            with tf.variable_scope('hop_{}'.format(hopn)):
+                # Use LSTM cell to generate new m (aka c) from m_emb again?
+                m_emb_C = tf.nn.embedding_lookup(self.C[hopn], stories)
+
+            m_emb_C_sentences = tf.unpack(m_emb_C, axis=1)
+
+            m_C_states_all_sent = [] 
+            
+            c_cell = rnn_cell.GRUCell(self._embedding_size)
+            c_cell = rnn_cell.DropoutWrapper(c_cell,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
+            m_c_cost = tf.Variable(dtype=tf.float32, initial_value=float(0), trainable=False)
+
+            for i, sentence in enumerate(m_emb_C_sentences):
+                # if not self._use_proj:
+                    # For adj-weight sharing scheme
+                reuse = None if (i == 0) else True
+                # else:
+                #   reuse = None if ((i == 0) and (hopn == 0)) else True
+
+                c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
+
+                # Again use adj-weight sharing for rnn weights
+                with tf.variable_scope(rnn_C_scopes[hopn], reuse=reuse):
+                    # m_emb_C_seq = tf.unpack(sentence, axis=1)
+                    m_c_outputs, m_c_states = rnn.dynamic_rnn(c_cell, sentence, initial_state=c_init_state,
+                                                                sequence_length=stories_lens[:, i])
+
+                reuse_lm = None if (i == 0) else True
+                with tf.variable_scope(rnn_C_scopes[hopn] + "_cost", reuse=reuse_lm):
+                    # project c_outputs to vocabulary w/ another W
+                    m_c_outputs_flat = tf.reshape(tf.concat(1, m_c_outputs), (-1, self._embedding_size))
+
+                    w_out_c = tf.get_variable("w", (self._embedding_size, self._vocab_size))
+                    b_out_c = tf.get_variable("b", self._vocab_size)
+                    predicted_m_c = tf.matmul(m_c_outputs_flat, w_out_c) + b_out_c
+                    m_c_loss = tf.nn.seq2seq.sequence_loss_by_example([predicted_m_c], [tf.concat(-1, stories[:, i])],
+                                                                       [tf.ones(self._batch_size * self._sentence_size)])
+                    m_c_cost += tf.div(tf.reduce_sum(m_c_loss), self._batch_size, name="cost")
+
+            m_c_costs.append(m_c_cost)
+
+        return q_cost, m_a_costs, m_c_costs
+
     def _inference(self, stories, stories_lens, queries, queries_lens):
         with tf.variable_scope(self._name):
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
@@ -204,7 +357,7 @@ class MemN2N(object):
         # self._use_proj = True
 
         # Let B = A_1
-        with tf.variable_scope(rnn_A_scopes[0], reuse=None):
+        with tf.variable_scope(rnn_A_scopes[0], reuse=True):
             q_cell = rnn_cell.GRUCell(self._embedding_size)
             # Add dropout
             q_cell = rnn_cell.DropoutWrapper(q_cell,
@@ -274,11 +427,12 @@ class MemN2N(object):
                                              output_keep_prob=self._rnn_output_keep_prob)
 
             for i, sentence in enumerate(m_emb_C_sentences):
-                if not self._use_proj:
-                    # For adj-weight sharing scheme
-                    reuse = None if (i == 0) else True
-                else:
-                    reuse = None if ((i == 0) and (hopn == 0)) else True
+                reuse = True
+                # if not self._use_proj:
+                #     # For adj-weight sharing scheme
+                #     reuse = None if (i == 0) else True
+                # else:
+                #     reuse = None if ((i == 0) and (hopn == 0)) else True
 
                 c_init_state = c_cell.zero_state(tf.shape(stories)[0], tf.float32)
 
@@ -331,6 +485,23 @@ class MemN2N(object):
                      self._answers: answers}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
+
+    def batch_lm_fit(self, stories, s_lens, queries, q_lens, answers):
+        """Runs the training algorithm over the passed batch
+
+        Args:
+            stories: Tensor (None, memory_size, sentence_size)
+            queries: Tensor (None, sentence_size)
+            answers: Tensor (None, vocab_size)
+
+        Returns:
+            loss: floating-point number, the loss computed for the batch
+        """
+        feed_dict = {self._stories: stories, self._stories_len: s_lens, 
+                     self._queries: queries, self._queries_len: q_lens, 
+                     self._answers: answers}
+        lm_loss, _ = self._sess.run([self.lm_loss_op, self.lm_train_op], feed_dict=feed_dict)
+        return lm_loss
 
     def predict(self, stories, s_lens, queries, q_lens):
         """Predicts answers as one-hot encoding.
