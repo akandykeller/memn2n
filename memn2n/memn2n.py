@@ -65,7 +65,6 @@ class MemN2N(object):
         rnn_input_keep_prob=0.8,
         rnn_output_keep_prob=1.0,
         initializer=tf.random_normal_initializer(stddev=0.1),
-        optimizer=tf.train.AdamOptimizer(learning_rate=1e-2),
         encoding=position_encoding,
         session=tf.Session(),
         name='MemN2N'):
@@ -95,8 +94,6 @@ class MemN2N(object):
 
             initializer: Weight initializer. Defaults to `tf.random_normal_initializer(stddev=0.1)`.
 
-            optimizer: Optimizer algorithm used for SGD. Defaults to `tf.train.AdamOptimizer(learning_rate=1e-2)`.
-
             encoding: A function returning a 2D Tensor (sentence_size, embedding_size). Defaults to `position_encoding`.
 
             session: Tensorflow Session the model is run with. Defaults to `tf.Session()`.
@@ -115,13 +112,14 @@ class MemN2N(object):
         self._rnn_input_keep_prob = rnn_input_keep_prob
         self._rnn_output_keep_prob = rnn_output_keep_prob
         self._init = initializer
-        self._opt = optimizer
         self._name = name
         self._use_proj = use_proj
 
         self._build_inputs()
         self._build_vars()
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
+
+        self._opt = tf.train.GradientDescentOptimizer(learning_rate=self._lr)
 
         # Compute LM Loss
         q_cost, m_a_costs, m_c_costs = self._lm_inference(self._stories, self._stories_len, self._queries, self._queries_len)
@@ -188,6 +186,7 @@ class MemN2N(object):
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._queries_len = tf.placeholder(tf.int32, [None], name="queries_lens")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
+        self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -469,7 +468,7 @@ class MemN2N(object):
         with tf.variable_scope('hop_{}'.format(self._hops)):
             return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, s_lens, queries, q_lens, answers):
+    def batch_fit(self, stories, s_lens, queries, q_lens, answers, learning_rate):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -482,11 +481,11 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._stories_len: s_lens, 
                      self._queries: queries, self._queries_len: q_lens, 
-                     self._answers: answers}
+                     self._answers: answers, self._lr: learning_rate}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
 
-    def batch_lm_fit(self, stories, s_lens, queries, q_lens, answers):
+    def batch_lm_fit(self, stories, s_lens, queries, q_lens, answers, learning_rate):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -499,7 +498,7 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._stories_len: s_lens, 
                      self._queries: queries, self._queries_len: q_lens, 
-                     self._answers: answers}
+                     self._answers: answers, self._lr: learning_rate}
         lm_loss, _ = self._sess.run([self.lm_loss_op, self.lm_train_op], feed_dict=feed_dict)
         return lm_loss
 

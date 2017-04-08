@@ -16,7 +16,9 @@ import copy
 import csv
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
-tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
+tf.flags.DEFINE_float("anneal_rate", 10, "Number of epochs between halving the learnign rate.")
+tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
+# tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
@@ -84,7 +86,7 @@ val_labels = np.argmax(valA, axis=1)
 
 tf.set_random_seed(FLAGS.random_state)
 batch_size = FLAGS.batch_size
-optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
+# optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
 
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
@@ -93,10 +95,17 @@ train_eval_batches = copy.copy(batches)
 
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
     
     print("Beginning LM Training")
     for t in range(1, FLAGS.lm_epochs+1):
+        # Stepped learning rate
+        if t - 1 <= FLAGS.anneal_stop_epoch:
+            anneal = 2.0 ** ((t - 1) // FLAGS.anneal_rate)
+        else:
+            anneal = 2.0 ** (FLAGS.anneal_stop_epoch // FLAGS.anneal_rate)
+        lr = FLAGS.learning_rate / anneal
+
         np.random.shuffle(batches)
         lm_total_cost = 0.0
         for start, end in tqdm(batches, desc='Epoch {}: '.format(t)):
@@ -106,13 +115,20 @@ with tf.Session() as sess:
             q_lens = trainQ_lens[start:end]
             a = trainA[start:end]
 
-            lm_cost = model.batch_lm_fit(s, s_lens, q, q_lens, a)
+            lm_cost = model.batch_lm_fit(s, s_lens, q, q_lens, a, lr)
             lm_total_cost += lm_cost
         if t % FLAGS.evaluation_interval == 0:
-            print("Epoch {} -- LM total cost: {}".format(t, lm_total_cost))
+            print("Epoch {} , LR: {} -- LM total cost: {}".format(t, lr, lm_total_cost))
 
     print("Beginning QA training")
     for t in range(1, FLAGS.epochs+1):
+        # Stepped learning rate
+        if t - 1 <= FLAGS.anneal_stop_epoch:
+            anneal = 2.0 ** ((t - 1) // FLAGS.anneal_rate)
+        else:
+            anneal = 2.0 ** (FLAGS.anneal_stop_epoch // FLAGS.anneal_rate)
+        lr = FLAGS.learning_rate / anneal
+
         np.random.shuffle(batches)
         total_cost = 0.0
         for start, end in tqdm(batches, desc='Epoch {}: '.format(t)):
@@ -122,7 +138,7 @@ with tf.Session() as sess:
             q_lens = trainQ_lens[start:end]
             a = trainA[start:end]
 
-            cost = model.batch_fit(s, s_lens, q, q_lens, a)
+            cost = model.batch_fit(s, s_lens, q, q_lens, a, lr)
             total_cost += cost
 
         if t % FLAGS.evaluation_interval == 0:
@@ -142,6 +158,7 @@ with tf.Session() as sess:
 
             print('-----------------------')
             print('Epoch', t)
+            print('LR', lr)
             print('Total Cost:', total_cost)
             print('Training Accuracy:', train_acc)
             print('Validation Accuracy:', val_acc)
