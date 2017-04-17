@@ -60,8 +60,8 @@ class MemN2N(object):
     def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
         hops=3,
         max_grad_norm=40.0,
-        nonlin=tf.nn.relu,
-        use_proj=True,
+        nonlin=None,  # tf.nn.relu,
+        use_proj=False,
         rnn_input_keep_prob=0.8,
         rnn_output_keep_prob=1.0,
         initializer=tf.random_normal_initializer(stddev=0.1),
@@ -120,6 +120,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         self._opt = tf.train.GradientDescentOptimizer(learning_rate=self._lr)
+        # self._opt = tf.train.AdamOptimizer(learning_rate=self._lr, epsilon=1e-8)
 
         # Compute LM Loss
         q_cost, m_a_costs, m_c_costs = self._lm_inference(self._stories, self._stories_len, self._queries, self._queries_len)
@@ -176,6 +177,9 @@ class MemN2N(object):
         self.lm_train_op = lm_train_op
 
         init_op = tf.initialize_all_variables()
+
+        self.saver = tf.train.Saver(max_to_keep=None)
+
         self._sess = session
         self._sess.run(init_op)
 
@@ -516,7 +520,7 @@ class MemN2N(object):
                      self._queries: queries, self._queries_len: q_lens} 
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
-    def predict_proba(self, stories, queries):
+    def predict_proba(self, stories, s_lens, queries, q_lens):
         """Predicts probabilities of answers.
 
         Args:
@@ -526,7 +530,8 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._stories: stories, self._stories_len: s_lens, 
+                     self._queries: queries, self._queries_len: q_lens}
         return self._sess.run(self.predict_proba_op, feed_dict=feed_dict)
 
     def predict_log_proba(self, stories, queries):

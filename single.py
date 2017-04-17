@@ -16,9 +16,9 @@ import copy
 import csv
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer.")
-tf.flags.DEFINE_float("anneal_rate", 10, "Number of epochs between halving the learnign rate.")
+tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
 tf.flags.DEFINE_float("anneal_stop_epoch", 100, "Epoch number to end annealed lr schedule.")
-# tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
+tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
@@ -30,6 +30,7 @@ tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
 tf.flags.DEFINE_integer("task_id", 1, "bAbI task id, 1 <= id <= 20")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
 tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en/", "Directory containing bAbI tasks")
+tf.flags.DEFINE_string("save_dir", "saved_models/", "File to save model to.")
 FLAGS = tf.flags.FLAGS
 
 print("Started Task:", FLAGS.task_id)
@@ -86,7 +87,6 @@ val_labels = np.argmax(valA, axis=1)
 
 tf.set_random_seed(FLAGS.random_state)
 batch_size = FLAGS.batch_size
-# optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
 
 batches = zip(range(0, n_train-batch_size, batch_size), range(batch_size, n_train, batch_size))
 batches = [(start, end) for start, end in batches]
@@ -119,6 +119,9 @@ with tf.Session() as sess:
             lm_total_cost += lm_cost
         if t % FLAGS.evaluation_interval == 0:
             print("Epoch {} , LR: {} -- LM total cost: {}".format(t, lr, lm_total_cost))
+
+            save_path = model.saver.save(model._sess, FLAGS.save_dir + "rnn_lm_total-elm{}_elm{}.ckpt".format(FLAGS.lm_epochs, t))
+            print("Model saved to {}".format(save_path))
 
     print("Beginning QA training")
     for t in range(1, FLAGS.epochs+1):
@@ -164,7 +167,7 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_lm/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+            with open('results_personal/rnn_lm/rnn_lm_task{}_total-elm{}.csv'.format(FLAGS.task_id, FLAGS.lm_epochs), 'a') as csvfile:
                 fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -173,9 +176,12 @@ with tf.Session() as sess:
                                  'Train Acc':train_acc,
                                  'Validation Acc':val_acc})
 
+            save_path = model.saver.save(model._sess, FLAGS.save_dir + "rnn_lm_total-elm{}_eqa{}.ckpt".format(FLAGS.lm_epochs, t))
+            print("Model saved to {}".format(save_path))
+
 
     test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
-    with open('results_personal/rnn_lm/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as f:
+    with open('results_personal/rnn_lm/rnn_lm_task{}_total-elm{}.csv'.format(FLAGS.task_id, FLAGS.lm_epochs), 'a') as f:
         f.write("Test Accuracy: {}".format(test_acc))
