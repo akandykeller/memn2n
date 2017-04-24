@@ -25,13 +25,13 @@ tf.flags.DEFINE_integer("batch_evaluation_num_batches", 100, "Evaluate and print
 tf.flags.DEFINE_integer("batch_size", 16, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 2, "Number of hops in the Memory Network.")
 tf.flags.DEFINE_integer("epochs", 500, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("embedding_size", 500, "Embedding size for embedding matrices.")
-tf.flags.DEFINE_integer("memory_size", 1000, "Maximum size of memory.")
+tf.flags.DEFINE_integer("embedding_size", 400, "Embedding size for embedding matrices.")
+tf.flags.DEFINE_integer("memory_size", 500, "Maximum size of memory.")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
 tf.flags.DEFINE_string("data_dir", "movieqa/", "Directory containing movie QA dataset")
 tf.flags.DEFINE_string("processed_data_dir", 'processed_data/', "Directory containing processed movie QA dataset")
 tf.flags.DEFINE_boolean("save_processed_data", True, "Flag to determine if data should be saved agter preprocessing")
-tf.flags.DEFINE_integer("max_key_len", 100, "Clip sentences to this length")
+tf.flags.DEFINE_integer("max_key_len", 80, "Clip sentences to this length")
 tf.flags.DEFINE_boolean("reprocess_data", False, "Flag to load or reprocess data")
 tf.flags.DEFINE_boolean("reprocess_raw", False, "Flag to load or reprocess data from raw")
 
@@ -179,7 +179,9 @@ else:
 num_entities = len(ent_idx) + 1
 
 print(testS[0])
-print("Training set shape", trainS.shape)
+print("Training story set shape", trainS.shape)
+print("Training question set shape", trainQ.shape)
+print("Training answer set shape", trainA.shape)
 
 # params
 n_train = trainS.shape[0]
@@ -224,7 +226,7 @@ with tf.Session() as sess:
             y = np.zeros([end - start, len(ent_idx) + 1])
             
             for b_idx, ans in enumerate(a):
-                for ans_idx in ans:
+                for ans_idx in ans[:10]:
                     # Use uniform distribution for multiple answers
                     y[b_idx][ans_idx] = 1.0 / len(ans)
 
