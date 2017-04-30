@@ -9,7 +9,7 @@ def load_task(data_dir, task_id, only_supporting=False):
 
     Returns a tuple containing the training and testing data for the task.
     '''
-    assert task_id > 0 and task_id < 21
+    assert task_id > 0 and task_id < 22
 
     files = os.listdir(data_dir)
     files = [os.path.join(data_dir, f) for f in files]
