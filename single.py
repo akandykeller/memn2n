@@ -90,6 +90,12 @@ batches = [(start, end) for start, end in batches]
 # Get list of ordered batches for eval before shuffling
 train_eval_batches = copy.copy(batches)
 
+val_batches = zip(range(0, n_val-batch_size, batch_size), range(batch_size, n_val, batch_size))
+val_eval_batches = [(start, end) for start, end in val_batches]
+
+test_batches = zip(range(0, n_test-batch_size, batch_size), range(batch_size, n_test, batch_size))
+test_eval_batches = [(start, end) for start, end in test_batches]
+
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
                    hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
@@ -117,7 +123,17 @@ with tf.Session() as sess:
                 pred = model.predict(s, s_lens, q, q_lens)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valS_lens, valQ, valQ_lens)
+            val_preds = []
+            #for start in range(0, n_train, batch_size):
+            for start, end in tqdm(val_eval_batches, desc='Validation Eval: '):
+                s = valS[start:end]
+                s_lens = valS_lens[start:end]
+                q = valQ[start:end]
+                q_lens = valQ_lens[start:end]
+                pred = model.predict(s, s_lens, q, q_lens)
+                val_preds += list(pred)  
+
+
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
             val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
 
@@ -128,16 +144,25 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
-                fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            # with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+            #     fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
+            #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-                writer.writerow({'Epoch':t, 
-                                 'Total Cost':total_cost,
-                                 'Train Acc':train_acc,
-                                 'Validation Acc':val_acc})
+            #     writer.writerow({'Epoch':t, 
+            #                      'Total Cost':total_cost,
+            #                      'Train Acc':train_acc,
+            #                      'Validation Acc':val_acc})
 
 
-    test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
+
+    test_preds = []
+    for start, end in tqdm(test_eval_batches, desc='Test Eval: '):
+        s = testS[start:end]
+        s_lens = testS_lens[start:end]
+        q = testQ[start:end]
+        q_lens = testlQ_lens[start:end]
+        pred = model.predict(s, s_lens, q, q_lens)
+        test_preds += list(pred)  
+
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)

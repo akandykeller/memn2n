@@ -62,7 +62,7 @@ class MemN2N(object):
         max_grad_norm=40.0,
         nonlin=None,
         use_proj=False,
-        rnn_input_keep_prob=0.8,
+        rnn_input_keep_prob=1.0,
         rnn_output_keep_prob=1.0,
         initializer=tf.random_normal_initializer(stddev=0.1),
         optimizer=tf.train.AdamOptimizer(learning_rate=1e-2),
@@ -251,10 +251,37 @@ class MemN2N(object):
 
             m_A = m_A_states_h_t
 
+            # import ipdb
+            # ipdb.set_trace()
+
+            # Run fusion layer
+            fusion_cell_fw_A = rnn_cell.GRUCell(self._embedding_size / 2)
+            fusion_cell_fw_A = rnn_cell.DropoutWrapper(fusion_cell_fw_A,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
+            fusion_cell_bw_A = rnn_cell.GRUCell(self._embedding_size / 2)
+            fusion_cell_bw_A = rnn_cell.DropoutWrapper(fusion_cell_bw_A,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
+            reuse = hopn > 0
+            with tf.variable_scope("RNN_Fusion_A", reuse=reuse):
+                fw_init_state_A = fusion_cell_fw_A.zero_state(tf.shape(m_A)[0], tf.float32)
+                bw_init_state_A = fusion_cell_bw_A.zero_state(tf.shape(m_A)[0], tf.float32)
+
+                fusion_states_A, fusion_out_A = rnn.bidirectional_dynamic_rnn(fusion_cell_fw_A, 
+                                                              fusion_cell_bw_A,
+                                                              m_A, 
+                                                              sequence_length=[self._memory_size]*self._batch_size,
+                                                              initial_state_fw=fw_init_state_A,
+                                                              initial_state_bw=bw_init_state_A)
+                fwbw_states_A = tf.concat(2, fusion_states_A)
+
             # hack to get around no reduce_dot
             u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
 
-            dotted = tf.reduce_sum(m_A * u_temp, 2)
+            dotted = tf.reduce_sum(fwbw_states_A * u_temp, 2)
             
             # Calculate probabilities
             probs = tf.nn.softmax(dotted)
@@ -291,11 +318,39 @@ class MemN2N(object):
 
             m_C_states_h = tf.pack(m_C_states_all_sent)
             m_C_states_h_t = tf.transpose(m_C_states_h, [1, 0 ,2])
-           
+            
             with tf.variable_scope('hop_{}'.format(hopn)):
                 m_C = m_C_states_h_t
 
-            m_C_t = tf.transpose(m_C, [0, 2, 1])
+            # Run fusion layer
+            fusion_cell_fw_C = rnn_cell.GRUCell(self._embedding_size / 2)
+            fusion_cell_fw_C = rnn_cell.DropoutWrapper(fusion_cell_fw_C,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
+            fusion_cell_bw_C = rnn_cell.GRUCell(self._embedding_size / 2)
+            fusion_cell_bw_C = rnn_cell.DropoutWrapper(fusion_cell_bw_C,
+                                             input_keep_prob=self._rnn_input_keep_prob,
+                                             output_keep_prob=self._rnn_output_keep_prob)
+
+            # import ipdb
+            # ipdb.set_trace()
+
+            reuse = hopn > 0
+            with tf.variable_scope("RNN_Fusion_C", reuse=reuse):
+                fw_init_state_C = fusion_cell_fw_C.zero_state(tf.shape(m_C)[0], tf.float32)
+                bw_init_state_C = fusion_cell_bw_C.zero_state(tf.shape(m_C)[0], tf.float32)
+
+                fusion_states_C, fusion_out_C = rnn.bidirectional_dynamic_rnn(fusion_cell_fw_C, 
+                                                              fusion_cell_bw_C,
+                                                              m_C, 
+                                                              sequence_length=[self._memory_size]*self._batch_size,
+                                                              initial_state_fw=fw_init_state_C,
+                                                              initial_state_bw=bw_init_state_C)
+                fwbw_states_C = tf.concat(2, fusion_states_C)
+
+
+            m_C_t = tf.transpose(fwbw_states_C, [0, 2, 1])
 
             # Take weighted sum of embedded memories
             o_k = tf.reduce_sum(m_C_t * tf.expand_dims(probs, 1), 2)
