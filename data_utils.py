@@ -94,6 +94,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     Q = []
     Q_lens = []
     A = []
+    m_lens = []
 
     for story, query, answer in data:
         ss = []
@@ -132,4 +133,5 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         Q.append(q)
         Q_lens.append(len(query))
         A.append(y)
-    return np.array(S), np.array(S_lens), np.array(Q), np.array(Q_lens), np.array(A)
+        m_lens.append(len(ss))
+    return np.array(S), np.array(S_lens), np.array(Q), np.array(Q_lens), np.array(A), np.array(m_lens)

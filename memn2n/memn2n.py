@@ -124,7 +124,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._stories_len, self._queries, self._queries_len) # (batch_size, vocab_size)
+        logits = self._inference(self._stories, self._stories_len, self._queries, self._queries_len, self._m_lens) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -166,6 +166,7 @@ class MemN2N(object):
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._queries_len = tf.placeholder(tf.int32, [None], name="queries_lens")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
+        self._m_lens = tf.placeholder(tf.int32, [None], name="memory_lens")
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -189,7 +190,7 @@ class MemN2N(object):
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
 
-    def _inference(self, stories, stories_lens, queries, queries_lens):
+    def _inference(self, stories, stories_lens, queries, queries_lens, m_lens):
         with tf.variable_scope(self._name):
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
             # q_emb_seq = tf.unpack(q_emb, axis=1)
@@ -273,7 +274,7 @@ class MemN2N(object):
                 fusion_states_A, fusion_out_A = rnn.bidirectional_dynamic_rnn(fusion_cell_fw_A, 
                                                               fusion_cell_bw_A,
                                                               m_A, 
-                                                              sequence_length=[self._memory_size]*self._batch_size,
+                                                              sequence_length=m_lens,
                                                               initial_state_fw=fw_init_state_A,
                                                               initial_state_bw=bw_init_state_A)
                 fwbw_states_A = tf.concat(2, fusion_states_A)
@@ -344,7 +345,7 @@ class MemN2N(object):
                 fusion_states_C, fusion_out_C = rnn.bidirectional_dynamic_rnn(fusion_cell_fw_C, 
                                                               fusion_cell_bw_C,
                                                               m_C, 
-                                                              sequence_length=[self._memory_size]*self._batch_size,
+                                                              sequence_length=m_lens,
                                                               initial_state_fw=fw_init_state_C,
                                                               initial_state_bw=bw_init_state_C)
                 fwbw_states_C = tf.concat(2, fusion_states_C)
@@ -370,7 +371,7 @@ class MemN2N(object):
         with tf.variable_scope('hop_{}'.format(self._hops)):
             return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, s_lens, queries, q_lens, answers):
+    def batch_fit(self, stories, s_lens, queries, q_lens, answers, m_lens):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -383,11 +384,11 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._stories_len: s_lens, 
                      self._queries: queries, self._queries_len: q_lens, 
-                     self._answers: answers}
+                     self._answers: answers, self._m_lens: m_lens}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
         return loss
 
-    def predict(self, stories, s_lens, queries, q_lens):
+    def predict(self, stories, s_lens, queries, q_lens, m_lens):
         """Predicts answers as one-hot encoding.
 
         Args:
@@ -398,7 +399,8 @@ class MemN2N(object):
             answers: Tensor (None, vocab_size)
         """
         feed_dict = {self._stories: stories, self._stories_len: s_lens, 
-                     self._queries: queries, self._queries_len: q_lens} 
+                     self._queries: queries, self._queries_len: q_lens,
+                     self._m_lens: m_lens} 
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
     def predict_proba(self, stories, queries):

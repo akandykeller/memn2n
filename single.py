@@ -57,9 +57,9 @@ print("Longest story length", max_story_size)
 print("Average story length", mean_story_size)
 
 # train/validation/test sets
-S, S_lens, Q, Q_lens, A = vectorize_data(train, word_idx, sentence_size, memory_size)
-trainS, valS, trainS_lens, valS_lens, trainQ, valQ, trainQ_lens, valQ_lens, trainA, valA = cross_validation.train_test_split(S, S_lens, Q, Q_lens, A, test_size=.1, random_state=FLAGS.random_state)
-testS, testS_lens, testQ, testQ_lens, testA = vectorize_data(test, word_idx, sentence_size, memory_size)
+S, S_lens, Q, Q_lens, A, m_lens = vectorize_data(train, word_idx, sentence_size, memory_size)
+trainS, valS, trainS_lens, valS_lens, trainQ, valQ, trainQ_lens, valQ_lens, trainA, valA, train_mlens, val_mlens = cross_validation.train_test_split(S, S_lens, Q, Q_lens, A, m_lens,test_size=.1, random_state=FLAGS.random_state)
+testS, testS_lens, testQ, testQ_lens, testA, test_mlens = vectorize_data(test, word_idx, sentence_size, memory_size)
 
 print("TestS:", testS[0])
 print("TestS_lens:", testS_lens[0])
@@ -108,8 +108,9 @@ with tf.Session() as sess:
             q = trainQ[start:end]
             q_lens = trainQ_lens[start:end]
             a = trainA[start:end]
+            m_lens = train_mlens[start:end]
 
-            cost_t = model.batch_fit(s, s_lens, q, q_lens, a)
+            cost_t = model.batch_fit(s, s_lens, q, q_lens, a, m_lens)
             total_cost += cost_t
 
         if t % FLAGS.evaluation_interval == 0:
@@ -120,7 +121,9 @@ with tf.Session() as sess:
                 s_lens = trainS_lens[start:end]
                 q = trainQ[start:end]
                 q_lens = trainQ_lens[start:end]
-                pred = model.predict(s, s_lens, q, q_lens)
+                m_lens = train_mlens[start:end]
+
+                pred = model.predict(s, s_lens, q, q_lens, m_lens)
                 train_preds += list(pred)
 
             val_preds = []
@@ -130,7 +133,9 @@ with tf.Session() as sess:
                 s_lens = valS_lens[start:end]
                 q = valQ[start:end]
                 q_lens = valQ_lens[start:end]
-                pred = model.predict(s, s_lens, q, q_lens)
+                m_lens = val_mlens[start:end]
+
+                pred = model.predict(s, s_lens, q, q_lens, m_lens)
                 val_preds += list(pred)  
 
 
@@ -161,7 +166,9 @@ with tf.Session() as sess:
         s_lens = testS_lens[start:end]
         q = testQ[start:end]
         q_lens = testlQ_lens[start:end]
-        pred = model.predict(s, s_lens, q, q_lens)
+        m_lens = test_mlens[start:end]
+
+        pred = model.predict(s, s_lens, q, q_lens, m_lens)
         test_preds += list(pred)  
 
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
