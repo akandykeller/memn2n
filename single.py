@@ -55,9 +55,9 @@ print("Longest story length", max_story_size)
 print("Average story length", mean_story_size)
 
 # train/validation/test sets
-S, Q, A = vectorize_data(train, word_idx, sentence_size, memory_size)
-trainS, valS, trainQ, valQ, trainA, valA = cross_validation.train_test_split(S, Q, A, test_size=.1, random_state=FLAGS.random_state)
-testS, testQ, testA = vectorize_data(test, word_idx, sentence_size, memory_size)
+S, Q, A, m_lens = vectorize_data(train, word_idx, sentence_size, memory_size)
+trainS, valS, trainQ, valQ, trainA, valA, train_m_lens, val_m_lens = cross_validation.train_test_split(S, Q, A, m_lens, test_size=.1, random_state=FLAGS.random_state)
+testS, testQ, testA, test_m_lens = vectorize_data(test, word_idx, sentence_size, memory_size)
 
 print(testS[0])
 
@@ -99,7 +99,8 @@ with tf.Session() as sess:
             s = trainS[start:end]
             q = trainQ[start:end]
             a = trainA[start:end]
-            cost_t = model.batch_fit(s, q, a, lr)
+            memory_lens = train_m_lens[start:end]
+            cost_t = model.batch_fit(s, q, a, lr, memory_lens)
             total_cost += cost_t
 
         if t % FLAGS.evaluation_interval == 0:
@@ -108,10 +109,11 @@ with tf.Session() as sess:
                 end = start + batch_size
                 s = trainS[start:end]
                 q = trainQ[start:end]
-                pred = model.predict(s, q)
+                memory_lens = train_m_lens[start:end]
+                pred = model.predict(s, q, memory_lens)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valQ)
+            val_preds = model.predict(valS, valQ, val_m_lens)
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels)
             val_acc = metrics.accuracy_score(val_preds, val_labels)
 
@@ -122,6 +124,6 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-    test_preds = model.predict(testS, testQ)
+    test_preds = model.predict(testS, testQ, test_m_lens)
     test_acc = metrics.accuracy_score(test_preds, test_labels)
     print("Testing Accuracy:", test_acc)

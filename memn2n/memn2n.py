@@ -5,6 +5,9 @@ The implementation is based on http://arxiv.org/abs/1503.08895 [1]
 from __future__ import absolute_import
 from __future__ import division
 
+from tensorflow.python.ops import rnn_cell
+from tensorflow.python.ops import rnn
+
 import tensorflow as tf
 import numpy as np
 from six.moves import range
@@ -117,7 +120,7 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
 
         # cross entropy
-        logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
+        logits = self._inference(self._stories, self._queries, self._m_lens) # (batch_size, vocab_size)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, tf.cast(self._answers, tf.float32), name="cross_entropy")
         cross_entropy_sum = tf.reduce_sum(cross_entropy, name="cross_entropy_sum")
 
@@ -158,6 +161,7 @@ class MemN2N(object):
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
+        self._m_lens = tf.placeholder(tf.int32, [None], name="memory_lens")
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -181,7 +185,7 @@ class MemN2N(object):
 
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
-    def _inference(self, stories, queries):
+    def _inference(self, stories, queries, m_lens):
         with tf.variable_scope(self._name):
             # Use A_1 for thee question embedding as per Adjacent Weight Sharing
             q_emb = tf.nn.embedding_lookup(self.A_1, queries)
@@ -198,9 +202,33 @@ class MemN2N(object):
                         m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], stories)
                         m_A = tf.reduce_sum(m_emb_A * self._encoding, 2)
 
+                # Run fusion layer for input memories
+                fusion_cell_fw_A = rnn_cell.GRUCell(self._embedding_size / 2)
+                fusion_cell_fw_A = rnn_cell.DropoutWrapper(fusion_cell_fw_A,
+                                                 input_keep_prob=1.0,
+                                                 output_keep_prob=1.0)
+
+                fusion_cell_bw_A = rnn_cell.GRUCell(self._embedding_size / 2)
+                fusion_cell_bw_A = rnn_cell.DropoutWrapper(fusion_cell_bw_A,
+                                                 input_keep_prob=1.0,
+                                                 output_keep_prob=1.0)
+
+                reuse = hopn > 0
+                with tf.variable_scope("RNN_Fusion_A", reuse=reuse):
+                    fw_init_state_A = fusion_cell_fw_A.zero_state(tf.shape(m_A)[0], tf.float32)
+                    bw_init_state_A = fusion_cell_bw_A.zero_state(tf.shape(m_A)[0], tf.float32)
+
+                    fusion_states_A, fusion_out_A = rnn.bidirectional_dynamic_rnn(fusion_cell_fw_A, 
+                                                                  fusion_cell_bw_A,
+                                                                  m_A, 
+                                                                  sequence_length=m_lens,
+                                                                  initial_state_fw=fw_init_state_A,
+                                                                  initial_state_bw=bw_init_state_A)
+                    fwbw_states_A = tf.concat(2, fusion_states_A)
+
                 # hack to get around no reduce_dot
                 u_temp = tf.transpose(tf.expand_dims(u[-1], -1), [0, 2, 1])
-                dotted = tf.reduce_sum(m_A * u_temp, 2)
+                dotted = tf.reduce_sum(fwbw_states_A * u_temp, 2)
 
                 # Calculate probabilities
                 probs = tf.nn.softmax(dotted)
@@ -212,8 +240,33 @@ class MemN2N(object):
                 m_C = tf.reduce_sum(m_emb_C * self._encoding, 2)
 
 
-                c_temp = tf.transpose(m_C, [0, 2, 1])
-                o_k = tf.reduce_sum(c_temp * probs_temp, 2)
+                # Run fusion layer
+                fusion_cell_fw_C = rnn_cell.GRUCell(self._embedding_size / 2)
+                fusion_cell_fw_C = rnn_cell.DropoutWrapper(fusion_cell_fw_C,
+                                                 input_keep_prob=1.0,
+                                                 output_keep_prob=1.0)
+
+                fusion_cell_bw_C = rnn_cell.GRUCell(self._embedding_size / 2)
+                fusion_cell_bw_C = rnn_cell.DropoutWrapper(fusion_cell_bw_C,
+                                                 input_keep_prob=1.0,
+                                                 output_keep_prob=1.0)
+
+                reuse = hopn > 0
+                with tf.variable_scope("RNN_Fusion_C", reuse=reuse):
+                    fw_init_state_C = fusion_cell_fw_C.zero_state(tf.shape(m_C)[0], tf.float32)
+                    bw_init_state_C = fusion_cell_bw_C.zero_state(tf.shape(m_C)[0], tf.float32)
+
+                    fusion_states_C, fusion_out_C = rnn.bidirectional_dynamic_rnn(fusion_cell_fw_C, 
+                                                                  fusion_cell_bw_C,
+                                                                  m_C, 
+                                                                  sequence_length=m_lens,
+                                                                  initial_state_fw=fw_init_state_C,
+                                                                  initial_state_bw=bw_init_state_C)
+                    fwbw_states_C = tf.concat(2, fusion_states_C)
+
+
+                m_C_t = tf.transpose(fwbw_states_C, [0, 2, 1])
+                o_k = tf.reduce_sum(m_C_t * probs_temp, 2)
 
                 # Dont use projection layer for adj weight sharing
                 # u_k = tf.matmul(u[-1], self.H) + o_k
@@ -230,7 +283,7 @@ class MemN2N(object):
             with tf.variable_scope('hop_{}'.format(self._hops)):
                 return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
-    def batch_fit(self, stories, queries, answers, learning_rate):
+    def batch_fit(self, stories, queries, answers, learning_rate, memory_lens):
         """Runs the training algorithm over the passed batch
 
         Args:
@@ -241,7 +294,9 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate}
+        feed_dict = {self._stories: stories, self._queries: queries, 
+                     self._answers: answers, self._lr: learning_rate,
+                     self._m_lens: memory_lens}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
 
         # print "q_emb:  " 
@@ -255,7 +310,7 @@ class MemN2N(object):
         
         return loss
 
-    def predict(self, stories, queries):
+    def predict(self, stories, queries, memory_lens):
         """Predicts answers as one-hot encoding.
 
         Args:
@@ -265,7 +320,7 @@ class MemN2N(object):
         Returns:
             answers: Tensor (None, vocab_size)
         """
-        feed_dict = {self._stories: stories, self._queries: queries}
+        feed_dict = {self._stories: stories, self._queries: queries, self._m_lens: memory_lens}
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
 
     def predict_proba(self, stories, queries):
