@@ -78,6 +78,7 @@ def get_stories(f, only_supporting=False):
     with open(f) as f:
         return parse_stories(f.readlines(), only_supporting=only_supporting)
 
+
 def vectorize_data(data, word_idx, sentence_size, memory_size):
     """
     Vectorize stories and queries.
@@ -92,6 +93,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     S = []
     Q = []
     A = []
+    m_lens = []
     for story, query, answer in data:
         ss = []
         for i, sentence in enumerate(story, 1):
@@ -106,6 +108,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         for i in range(len(ss)):
             ss[i][-1] = len(word_idx) - memory_size - i + len(ss)
 
+        m_len = len(ss)
         # pad to memory_size
         lm = max(0, memory_size - len(ss))
         for _ in range(lm):
@@ -121,4 +124,5 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         S.append(ss)
         Q.append(q)
         A.append(y)
-    return np.array(S), np.array(Q), np.array(A)
+        m_lens.append(m_len)
+    return np.array(S), np.array(Q), np.array(A), np.array(m_lens)
