@@ -120,6 +120,9 @@ class MemN2N(object):
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
         self._order_encoding = tf.constant(encoding(self._sentence_size_w_order, self._embedding_size), name="order_encoding")
 
+        # self._encoding = tf.ones([self._sentence_size, self._embedding_size], name="encoding")
+        # self._order_encoding = tf.ones([self._sentence_size_w_order, self._embedding_size], name="order_encoding")
+
 
         # cross entropy
         logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
@@ -288,8 +291,8 @@ class MemN2N(object):
 
     def _order_inference(self, sentences, q_words):
         with tf.variable_scope(self._name):
-            s_emb = tf.nn.embedding_lookup(self.A_1, sentences)
-            q_emb = tf.nn.embedding_lookup(self.A_1, q_words)
+            s_emb = tf.nn.embedding_lookup(self.C[-1], sentences)
+            q_emb = tf.nn.embedding_lookup(self.C[-1], q_words)
 
             # Last two words not necessarily target words. redo data iterator to pass them separately. fuck.
             s_enc = tf.reduce_sum(s_emb * self._order_encoding, 1)
