@@ -3,7 +3,7 @@ Download tasks from facebook.ai/babi """
 from __future__ import absolute_import
 from __future__ import print_function
 
-from data_utils import load_task, vectorize_data
+from data_utils import load_task, vectorize_data, vectorize_data_ordertest
 from sklearn import cross_validation, metrics
 from memn2n import MemN2N
 from itertools import chain
@@ -56,6 +56,8 @@ print("Longest sentence length", sentence_size)
 print("Longest story length", max_story_size)
 print("Average story length", mean_story_size)
 
+sentence_size_w_order = max(query_size, sentence_size) # 
+
 # train/validation/test sets
 S, S_lens, Q, Q_lens, A = vectorize_data(train, word_idx, sentence_size, memory_size)
 trainS, valS, trainS_lens, valS_lens, trainQ, valQ, trainQ_lens, valQ_lens, trainA, valA = cross_validation.train_test_split(S, S_lens, Q, Q_lens, A, test_size=.1, random_state=FLAGS.random_state)
@@ -66,6 +68,21 @@ print("TestS_lens:", testS_lens[0])
 print("TrainS:", trainS[0])
 print("TrainS_lens:", trainS_lens[0])
 
+# Vectorize data for encoder study
+S_order, S_order_lens, Q_order, A_order = vectorize_data_ordertest(train, word_idx, sentence_size_w_order)
+train_S_order, val_S_order, train_S_order_lens, val_S_order_lens, train_Q_order, val_Q_order, train_A_order, val_A_order = cross_validation.train_test_split(S_order, S_order_lens, Q_order, A_order, test_size=.1, random_state=FLAGS.random_state)
+test_S_order, test_S_order_lens, test_Q_order, test_A_order = vectorize_data_ordertest(test, word_idx, sentence_size_w_order)
+print("S_order[0]: ", train_S_order[0])
+print("Q_order[0]: ", train_Q_order[0])
+print("A_order[0]: ", train_A_order[0])
+print("S_order shape: ", train_S_order.shape)
+print("Percent Positive Train: ", np.mean(train_A_order))
+print("Percent Positive Val: ", np.mean(val_A_order))
+print("Percent Positive Test: ", np.mean(test_A_order))
+n_train_order = train_S_order.shape[0]
+
+
+print("Test S[0]: ", testS[0])
 print("Training set shape", trainS.shape)
 
 # params
@@ -90,9 +107,14 @@ batches = [(start, end) for start, end in batches]
 # Get list of ordered batches for eval before shuffling
 train_eval_batches = copy.copy(batches)
 
+order_batches = zip(range(0, n_train_order-batch_size, batch_size), range(batch_size, n_train_order, batch_size))
+order_batches = [(start, end) for start, end in order_batches]
+
 with tf.Session() as sess:
-    model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
-                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+    model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, 
+                   sentence_size_w_order=sentence_size_w_order, session=sess,
+                   hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
+
     for t in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
@@ -141,3 +163,60 @@ with tf.Session() as sess:
     test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
+
+
+    print("Beginning Order test")
+
+    best_val_acc = 0.0
+    num_worse = 0
+    # Run encoder study experiments using trained model
+    for t in range(1, 500):
+        np.random.shuffle(order_batches)
+        total_cost = 0.0
+
+        for start, end in order_batches:
+            s = train_S_order[start:end]
+            s_lens = train_S_order_lens[start:end]
+            q = train_Q_order[start:end]
+            a = train_A_order[start:end]
+            cost_t = model.order_batch_fit(s, s_lens, q, a)
+            total_cost += cost_t
+
+
+        if t % FLAGS.evaluation_interval == 0:
+            train_preds = []
+            for start in range(0, n_train_order, batch_size):
+                end = start + batch_size
+                s = train_S_order[start:end]
+                s_lens = train_S_order_lens[start:end]
+                q = train_Q_order[start:end]
+                pred = model.order_predict(s, s_lens, q)
+                train_preds += list(pred)
+
+
+            val_preds = model.order_predict(val_S_order, val_S_order_lens, val_Q_order)
+            train_acc = metrics.accuracy_score(np.array(train_preds), train_A_order[:, 1])
+            val_acc = metrics.accuracy_score(val_preds, val_A_order[:, 1])
+
+            print('-----------------------')
+            print('Epoch', t)
+            print('Total Cost:', total_cost)
+            print('Training Accuracy:', train_acc)
+            print('Validation Accuracy:', val_acc)
+            print('-----------------------')
+
+            if val_acc >= best_val_acc:
+                best_val_acc = val_acc 
+                num_worse = 0   
+            else:
+                num_worse += 1
+
+            if num_worse >= 2:
+                break
+
+    test_preds = model.order_predict(test_S_order, test_S_order_lens, test_Q_order)
+    test_acc = metrics.accuracy_score(test_preds, test_A_order[:, 1])
+    print("Testing Accuracy:", test_acc)
+
+
+

@@ -133,3 +133,66 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         Q_lens.append(len(query))
         A.append(y)
     return np.array(S), np.array(S_lens), np.array(Q), np.array(Q_lens), np.array(A)
+
+
+
+def vectorize_data_ordertest(data, word_idx, sentence_size_w_order):
+    """
+    Vectorize stories and queries.
+
+    S = sentence with two words appended
+    A = Whether words are in correct order or flipped order
+    """
+    S = []
+    s_lens = []
+    Q = []
+    A = []
+    for story, query, answer in data:
+        for i, sentence in enumerate(story, 1):
+            ls = max(0, sentence_size_w_order - len(sentence))
+            s = [word_idx[w] for w in sentence]
+            s_lens.append(len(s))
+
+            # word1 always comes before word2
+            w1_idx = np.random.randint(0, len(s)-1)
+            w2_idx = np.random.randint(w1_idx, len(s))
+
+            w1 = s[w1_idx]
+            w2 = s[w2_idx]
+
+            # 50% chance of correct order
+            if np.random.random() < 0.5:
+                Q.append([w1, w2])
+                A.append([0, 1])
+            else:
+                Q.append([w2, w1])
+                A.append([1, 0])
+
+            # pad to length
+            s += [0] * ls
+            S.append(s)
+
+        lq = max(0, sentence_size_w_order - len(query))
+        q = [word_idx[w] for w in query]
+        s_lens.append(len(q))
+
+        # word1 always comes before word2
+        w1_idx = np.random.randint(0, len(q)-1)
+        w2_idx = np.random.randint(w1_idx, len(q))
+
+        w1 = q[w1_idx]
+        w2 = q[w2_idx]
+
+        # 50% chance of correct order
+        if np.random.random() < 0.5:
+            Q.append([w1, w2])
+            A.append([0, 1])
+        else:
+            Q.append([w2, w1])
+            A.append([1, 0])
+
+        q += [0] * lq
+        S.append(q)
+
+    return np.array(S), np.array(s_lens), np.array(Q), np.array(A)
+
