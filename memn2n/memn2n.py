@@ -56,6 +56,7 @@ def add_gradient_noise(t, stddev=1e-3, name=None):
 class MemN2N(object):
     """End-To-End Memory Network."""
     def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,
+        sentence_size_w_order,
         hops=3,
         max_grad_norm=40.0,
         nonlin=None,
@@ -101,6 +102,7 @@ class MemN2N(object):
         self._batch_size = batch_size
         self._vocab_size = vocab_size
         self._sentence_size = sentence_size
+        self._sentence_size_w_order = sentence_size_w_order
         self._memory_size = memory_size
         self._embedding_size = embedding_size
         self._hops = hops
@@ -113,8 +115,11 @@ class MemN2N(object):
         self._build_vars()
 
         self._opt = tf.train.GradientDescentOptimizer(learning_rate=self._lr)
+        self._order_opt = tf.train.AdagradOptimizer(learning_rate=0.01)
 
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
+        self._order_encoding = tf.constant(encoding(self._sentence_size_w_order, self._embedding_size), name="order_encoding")
+
 
         # cross entropy
         logits = self._inference(self._stories, self._queries) # (batch_size, vocab_size)
@@ -126,7 +131,7 @@ class MemN2N(object):
 
         # gradient pipeline
         grads_and_vars = self._opt.compute_gradients(loss_op)
-        grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars]
+        grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars if g is not None]
         grads_and_vars = [(add_gradient_noise(g), v) for g,v in grads_and_vars]
         nil_grads_and_vars = []
         for g, v in grads_and_vars:
@@ -141,12 +146,46 @@ class MemN2N(object):
         predict_proba_op = tf.nn.softmax(logits, name="predict_proba_op")
         predict_log_proba_op = tf.log(predict_proba_op, name="predict_log_proba_op")
 
+
+        # Order loss op
+        # order inference needs to return [batch_size, 2]
+        order_logit = self._order_inference(self._order_sents, self._q_words) 
+        order_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(order_logit, tf.cast(self._order_answers, tf.float32), name="order_cross_entropy")
+        order_cross_entropy_sum = tf.reduce_sum(order_cross_entropy, name="order_cross_entropy_sum")
+        order_loss_op = order_cross_entropy_sum
+
+        # Order training ops (Still training embedding layers, try to turn off)
+        order_train_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+                                      "order_scope")                     
+        order_train_op = self._order_opt.minimize(order_cross_entropy_sum, var_list=order_train_vars)
+
+
+        # order_grads_and_vars = self._opt.compute_gradients(order_loss_op)
+        # order_grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in order_grads_and_vars]
+        # order_grads_and_vars = [(add_gradient_noise(g), v) for g,v in order_grads_and_vars]
+        # order_nil_grads_and_vars = []
+        # for g, v in order_grads_and_vars:
+        #     if v.name in self._nil_vars:
+        #         order_nil_grads_and_vars.append((zero_nil_slot(g), v))
+        #     else:
+        #         order_nil_grads_and_vars.append((g, v))
+        # order_train_op = self._opt.apply_gradients(order_nil_grads_and_vars, name="order_train_op")
+
+
+        # Order predict ops
+        order_predict_op = tf.argmax(order_logit, 1, name="order_predict_op")
+
+
         # assign ops
         self.loss_op = loss_op
         self.predict_op = predict_op
         self.predict_proba_op = predict_proba_op
         self.predict_log_proba_op = predict_log_proba_op
         self.train_op = train_op
+ 
+        self.order_loss_op = order_loss_op
+        self.order_predict_op = order_predict_op
+        self.order_train_op = order_train_op
 
         init_op = tf.initialize_all_variables()
         self._sess = session
@@ -158,6 +197,10 @@ class MemN2N(object):
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name="queries")
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name="answers")
         self._lr = tf.placeholder(tf.float32, [], name="learning_rate")
+
+        self._order_sents = tf.placeholder(tf.int32, [None, self._sentence_size_w_order], name='order_sentence')
+        self._q_words = tf.placeholder(tf.int32, [None, 2], name='order_q_words')
+        self._order_answers = tf.placeholder(tf.int32, [None, 2], name='order_answers')
 
     def _build_vars(self):
         with tf.variable_scope(self._name):
@@ -178,6 +221,18 @@ class MemN2N(object):
 
             # Use final C as replacement for W
             # self.W = tf.Variable(self._init([self._embedding_size, self._vocab_size]), name="W")
+
+        with tf.variable_scope('order_scope'):
+            # Map from sentence_w_order_words to binary label with 2 layer mlp
+            W1_order = self._init([self._embedding_size * 3, self._embedding_size * 3])
+            b1_order = self._init([self._embedding_size * 3])
+            self.W1_order = tf.Variable(W1_order, name='W1_order')
+            self.b1_order = tf.Variable(b1_order, name='b1_order')
+
+            W2_order = self._init([self._embedding_size * 3, 2])
+            b2_order = self._init([2])
+            self.W2_order = tf.Variable(W2_order, name='W2_order')
+            self.b2_order = tf.Variable(b2_order, name='b2_order')
 
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
@@ -230,6 +285,23 @@ class MemN2N(object):
             with tf.variable_scope('hop_{}'.format(self._hops)):
                 return tf.matmul(u_k, tf.transpose(self.C[-1], [1,0]))
 
+
+    def _order_inference(self, sentences, q_words):
+        with tf.variable_scope(self._name):
+            s_emb = tf.nn.embedding_lookup(self.A_1, sentences)
+            q_emb = tf.nn.embedding_lookup(self.A_1, q_words)
+
+            # Last two words not necessarily target words. redo data iterator to pass them separately. fuck.
+            s_enc = tf.reduce_sum(s_emb * self._order_encoding, 1)
+            sentence_w_order_words = tf.concat(1, [s_enc, q_emb[:, 0], q_emb[:, 1]])
+
+        with tf.variable_scope('order_scope'):
+            h_1 = tf.nn.relu(tf.matmul(sentence_w_order_words, self.W1_order) + self.b1_order)
+            h_out = tf.matmul(h_1, self.W2_order) + self.b2_order
+            # softmax is applied in cost
+        return h_out
+
+
     def batch_fit(self, stories, queries, answers, learning_rate):
         """Runs the training algorithm over the passed batch
 
@@ -244,16 +316,24 @@ class MemN2N(object):
         feed_dict = {self._stories: stories, self._queries: queries, self._answers: answers, self._lr: learning_rate}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict=feed_dict)
 
-        # print "q_emb:  " 
-        # print "***"*100
-        # print q_emb
-        # print "u_0:  " 
-        # print "***"*100
-        # print u_0
-        # print "***"*100
-        # print "***"*100
+        return loss
+
+    def order_batch_fit(self, sentences, q_words, answers):
+        """Runs the training algorithm over the passed batch
+
+        Args:
+            stories: Tensor (None, memory_size, sentence_size)
+            queries: Tensor (None, sentence_size)
+            answers: Tensor (None, vocab_size)
+
+        Returns:
+            loss: floating-point number, the loss computed for the batch
+        """
+        feed_dict = {self._order_sents: sentences, self._q_words: q_words, self._order_answers: answers}
+        loss, _ = self._sess.run([self.order_loss_op, self.order_train_op], feed_dict=feed_dict)
         
         return loss
+
 
     def predict(self, stories, queries):
         """Predicts answers as one-hot encoding.
@@ -267,6 +347,24 @@ class MemN2N(object):
         """
         feed_dict = {self._stories: stories, self._queries: queries}
         return self._sess.run(self.predict_op, feed_dict=feed_dict)
+
+
+    def order_predict(self, sentences, q_words):
+        """Predicts answers as one-hot encoding.
+
+        Args:
+            stories: Tensor (None, memory_size, sentence_size)
+            queries: Tensor (None, sentence_size)
+
+        Returns:
+            answers: Tensor (None, vocab_size)
+        """
+        feed_dict = {self._order_sents: sentences, self._q_words: q_words}
+        return self._sess.run(self.order_predict_op, feed_dict=feed_dict)
+
+
+
+
 
     def predict_proba(self, stories, queries):
         """Predicts probabilities of answers.
