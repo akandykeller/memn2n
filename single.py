@@ -11,6 +11,7 @@ from six.moves import range, reduce
 
 import tensorflow as tf
 import numpy as np
+import csv
 
 tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for SGD.")
 tf.flags.DEFINE_float("anneal_rate", 25, "Number of epochs between halving the learnign rate.")
@@ -142,10 +143,29 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
+            with open('results_ordertest/master_no_posenc/task_{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+                fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc', 'Test Acc']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+                writer.writerow({'Epoch':t, 
+                                 'Total Cost':total_cost,
+                                 'Train Acc':train_acc,
+                                 'Validation Acc':val_acc,
+                                 'Test Acc':-1})
+
+
     test_preds = model.predict(testS, testQ)
     test_acc = metrics.accuracy_score(test_preds, test_labels)
     print("Testing Accuracy:", test_acc)
+    with open('results_ordertest/master_no_posenc/task_{}_QA.csv'.format(FLAGS.task_id), 'a') as csvfile:
+        fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc', 'Test Acc']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
+        writer.writerow({'Epoch':t, 
+                         'Total Cost':total_cost,
+                         'Train Acc':train_acc,
+                         'Validation Acc':val_acc,
+                         'Test Acc':test_acc})
 
     print("Beginning Order test")
 
@@ -197,6 +217,7 @@ with tf.Session() as sess:
     test_preds = model.order_predict(test_S_order, test_Q_order)
     test_acc = metrics.accuracy_score(test_preds, test_A_order[:, 1])
     print("Testing Accuracy:", test_acc)
-
+    with open('results_ordertest/master_no_posenc/task_{}_ordertest.csv'.format(FLAGS.task_id), 'a') as csvfile:
+        csvfile.write('{}, {}, {}\n'.format(t, train_acc, val_acc, test_acc))
 
 
