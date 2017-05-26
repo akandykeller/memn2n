@@ -150,23 +150,32 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
-                fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
+            with open('results_ordertest/rnn_no_posenc/task_{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+                fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc', 'Test Acc']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
                 writer.writerow({'Epoch':t, 
                                  'Total Cost':total_cost,
                                  'Train Acc':train_acc,
-                                 'Validation Acc':val_acc})
+                                 'Validation Acc':val_acc,
+                                 'Test Acc':-1})
 
 
     test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
+    with open('results_ordertest/rnn_no_posenc/task_{}_QA.csv'.format(FLAGS.task_id), 'a') as csvfile:
+        fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc', 'Test Acc']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writerow({'Epoch':t, 
+                         'Total Cost':total_cost,
+                         'Train Acc':train_acc,
+                         'Validation Acc':val_acc,
+                         'Test Acc':test_acc})
 
 
     print("Beginning Order test")
-
     best_val_acc = 0.0
     num_worse = 0
     # Run encoder study experiments using trained model
@@ -211,12 +220,14 @@ with tf.Session() as sess:
             else:
                 num_worse += 1
 
-            if num_worse >= 2:
+            if num_worse > 2:
                 break
 
     test_preds = model.order_predict(test_S_order, test_S_order_lens, test_Q_order)
     test_acc = metrics.accuracy_score(test_preds, test_A_order[:, 1])
     print("Testing Accuracy:", test_acc)
+    with open('results_ordertest/rnn_no_posenc/task_{}_ordertest.csv'.format(FLAGS.task_id), 'a') as csvfile:
+        csvfile.write('{}, {}, {}\n'.format(t, train_acc, val_acc, test_acc))
 
 
 

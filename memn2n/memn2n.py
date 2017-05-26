@@ -127,8 +127,11 @@ class MemN2N(object):
 
         self._order_opt = tf.train.AdagradOptimizer(learning_rate=0.01)
 
-        self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
-        self._order_encoding = tf.constant(encoding(self._sentence_size_w_order, self._embedding_size), name="order_encoding")
+        # self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name="encoding")
+        # self._order_encoding = tf.constant(encoding(self._sentence_size_w_order, self._embedding_size), name="order_encoding")
+
+        self._encoding = tf.ones([self._sentence_size, self._embedding_size], name="encoding")
+        self._order_encoding = tf.ones([self._sentence_size_w_order, self._embedding_size], name="order_encoding")
 
         # cross entropy
         logits = self._inference(self._stories, self._stories_len, self._queries, self._queries_len) # (batch_size, vocab_size)
