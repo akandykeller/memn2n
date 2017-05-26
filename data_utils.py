@@ -155,7 +155,7 @@ def vectorize_data_ordertest(data, word_idx, sentence_size_w_order):
 
             # word1 always comes before word2
             w1_idx = np.random.randint(0, len(s)-1)
-            w2_idx = np.random.randint(w1_idx, len(s))
+            w2_idx = np.random.randint(w1_idx + 1, len(s))
 
             w1 = s[w1_idx]
             w2 = s[w2_idx]
@@ -178,7 +178,7 @@ def vectorize_data_ordertest(data, word_idx, sentence_size_w_order):
 
         # word1 always comes before word2
         w1_idx = np.random.randint(0, len(q)-1)
-        w2_idx = np.random.randint(w1_idx, len(q))
+        w2_idx = np.random.randint(w1_idx + 1, len(q))
 
         w1 = q[w1_idx]
         w2 = q[w2_idx]
