@@ -223,7 +223,7 @@ with tf.Session() as sess:
     test_acc = metrics.accuracy_score(test_preds, test_A_order[:, 1])
     print("Testing Accuracy:", test_acc)
     with open('results_ordertest/cnn/task_{}_ordertest.csv'.format(FLAGS.task_id), 'a') as csvfile:
-        csvfile.write('{}, {}, {}\n'.format(t, train_acc, val_acc, test_acc))
+        csvfile.write('{}, {}, {}, {}\n'.format(t, train_acc, val_acc, test_acc))
 
 
 
