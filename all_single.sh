@@ -4,6 +4,6 @@ do
     for t in {1..20}
     do
         echo "Beginning iter $iter, task $t. training" 
-        python single.py --task_id $t --epochs 20 --data_dir data/tasks_1-20_v1-2/en-10k/ 
+        python single.py --task_id $t --epochs 40 --data_dir data/tasks_1-20_v1-2/en-10k/ 
     done 
 done
