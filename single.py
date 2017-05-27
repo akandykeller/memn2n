@@ -19,14 +19,14 @@ tf.flags.DEFINE_float("learning_rate", 0.01, "Learning rate for Adam Optimizer."
 tf.flags.DEFINE_float("epsilon", 1e-8, "Epsilon value for Adam Optimizer.")
 tf.flags.DEFINE_float("max_grad_norm", 40.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 2, "Evaluate and print results every x epochs")
-tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
+tf.flags.DEFINE_integer("batch_size", 1, "Batch size for training.")
 tf.flags.DEFINE_integer("hops", 3, "Number of hops in the Memory Network.")
-tf.flags.DEFINE_integer("epochs", 50, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("embedding_size", 40, "Embedding size for embedding matrices.")
+tf.flags.DEFINE_integer("epochs", 40, "Number of epochs to train for.")
+tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.")
 tf.flags.DEFINE_integer("memory_size", 50, "Maximum size of memory.")
 tf.flags.DEFINE_integer("task_id", 1, "bAbI task id, 1 <= id <= 20")
 tf.flags.DEFINE_integer("random_state", None, "Random state.")
-tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en/", "Directory containing bAbI tasks")
+tf.flags.DEFINE_string("data_dir", "data/tasks_1-20_v1-2/en-10k/", "Directory containing bAbI tasks")
 FLAGS = tf.flags.FLAGS
 
 print("Started Task:", FLAGS.task_id)
@@ -57,11 +57,14 @@ print("Longest story length", max_story_size)
 print("Average story length", mean_story_size)
 
 # train/validation/test sets
-S, S_lens, Q, Q_lens, A = vectorize_data(train, word_idx, sentence_size, memory_size)
-trainS, valS, trainS_lens, valS_lens, trainQ, valQ, trainQ_lens, valQ_lens, trainA, valA = cross_validation.train_test_split(S, S_lens, Q, Q_lens, A, test_size=.1, random_state=FLAGS.random_state)
-testS, testS_lens, testQ, testQ_lens, testA = vectorize_data(test, word_idx, sentence_size, memory_size)
+S, S_rev, S_lens, Q, Q_rev, Q_lens, A = vectorize_data(train, word_idx, sentence_size, memory_size)
+trainS, valS, trainS_rev, valS_rev, trainS_lens, valS_lens, trainQ, valQ, trainQ_rev, valQ_rev, trainQ_lens, valQ_lens, trainA, valA = cross_validation.train_test_split(S, S_rev, S_lens, Q, Q_rev, Q_lens, A, test_size=.1, random_state=FLAGS.random_state)
+testS, testS_rev, testS_lens, testQ, testQ_rev, testQ_lens, testA = vectorize_data(test, word_idx, sentence_size, memory_size)
 
 print("TestS:", testS[0])
+print("TestS_rev:", testS_rev[0])
+print("TestQ:", testQ[0])
+print("TestQ_rev:", testQ_rev[0])
 print("TestS_lens:", testS_lens[0])
 print("TrainS:", trainS[0])
 print("TrainS_lens:", trainS_lens[0])
@@ -93,20 +96,22 @@ train_eval_batches = copy.copy(batches)
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
                    hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm, optimizer=optimizer)
+    sess.graph.finalize()
     for t in range(1, FLAGS.epochs+1):
         np.random.shuffle(batches)
         total_cost = 0.0
         b_idx = 0
         for start, end in tqdm(batches, desc='Epoch {}: '.format(t)):
             s = trainS[start:end]
+            s_rev = trainS_rev[start:end]
             s_lens = trainS_lens[start:end]
             q = trainQ[start:end]
+            q_rev = trainQ_rev[start:end]
             q_lens = trainQ_lens[start:end]
             a = trainA[start:end]
 
-            ae_lw = 1.0 - (((t-1) * len(train_eval_batches) + b_idx) / (float(FLAGS.epochs * len(train_eval_batches))))
-
-            cost_t = model.batch_fit(s, s_lens, q, q_lens, a, ae_lw)
+            ae_lw = 0.9 - 0.9 * (((t-1) * len(train_eval_batches) + b_idx) / (float(FLAGS.epochs * len(train_eval_batches))))
+            cost_t = model.batch_fit(s, s_rev, s_lens, q, q_rev, q_lens, a, ae_lw)
             total_cost += cost_t
             b_idx += 1
 
@@ -115,24 +120,27 @@ with tf.Session() as sess:
             #for start in range(0, n_train, batch_size):
             for start, end in tqdm(train_eval_batches, desc='Train Eval: '):
                 s = trainS[start:end]
+                s_rev = trainS_rev[start:end]
                 s_lens = trainS_lens[start:end]
                 q = trainQ[start:end]
+                q_rev = trainQ_rev[start:end]
                 q_lens = trainQ_lens[start:end]
-                pred = model.predict(s, s_lens, q, q_lens)
+                pred = model.predict(s, s_rev, s_lens, q, q_rev, q_lens)
                 train_preds += list(pred)
 
-            val_preds = model.predict(valS, valS_lens, valQ, valQ_lens)
+            val_preds = model.predict(valS, valS_rev, valS_lens, valQ, valQ_rev, valQ_lens)
             train_acc = metrics.accuracy_score(np.array(train_preds), train_labels[:len(train_preds)])
             val_acc = metrics.accuracy_score(val_preds, val_labels[:len(val_preds)])
 
             print('-----------------------')
             print('Epoch', t)
-            print('Total Cost:', total_cost)
+	    print('AE Weight:', ae_lw)
+	    print('Total Cost:', total_cost)
             print('Training Accuracy:', train_acc)
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            with open('results_personal/rnn_adj_all/train_log_GRU_task{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+            with open('results_personal/rnn_ae/task_{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
                 fieldnames = ['Epoch', 'Total Cost', 'Train Acc', 'Validation Acc']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -142,6 +150,8 @@ with tf.Session() as sess:
                                  'Validation Acc':val_acc})
 
 
-    test_preds = model.predict(testS, testS_lens, testQ, testQ_lens)
+    test_preds = model.predict(testS, testS_rev, testS_lens, testQ, testQ_rev, testQ_lens)
     test_acc = metrics.accuracy_score(test_preds, test_labels[:len(test_preds)])
     print("Testing Accuracy:", test_acc)
+    with open('results_personal/rnn_ae/task_{}.csv'.format(FLAGS.task_id), 'a') as csvfile:
+        csvfile.write('Test Acc: {}\n'.format(test_acc))

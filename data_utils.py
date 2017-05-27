@@ -90,23 +90,29 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     The answer array is returned as a one-hot encoding.
     """
     S = []
+    S_rev = []
     S_lens = []
     Q = []
+    Q_rev = []
     Q_lens = []
     A = []
 
     for story, query, answer in data:
         ss = []
+	ss_rev = []
         ss_lens = []
         for i, sentence in enumerate(story):
             ls = max(0, sentence_size - len(sentence))
             ss.append([word_idx[w] for w in sentence] + [0] * ls)
-            # Add time word directly at the end of the sentence
+            ss_rev.append([0] + [word_idx[w] for w in sentence[::-1][:-1]] + [0] * ls)
+	    # Add time word directly at the end of the sentence
             ss[i][len(sentence)] = len(word_idx) - memory_size - i + len(story)
-            ss_lens.append(len(sentence) + 1)
+            ss_rev[i][len(sentence)] = len(word_idx) - memory_size - i + len(story)
+	    ss_lens.append(len(sentence) + 1)
 
         # take only the most recent sentences that fit in memory
         ss = ss[::-1][:memory_size][::-1]
+	ss_rev = ss_rev[::-1][:memory_size][::-1]
         ss_lens = ss_lens[::-1][:memory_size][::-1]
 
         # Make the last word of each sentence the time 'word' which 
@@ -118,18 +124,22 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         lm = max(0, memory_size - len(ss))
         for _ in range(lm):
             ss.append([0] * sentence_size)
+	    ss_rev.append([0] * sentence_size)
             ss_lens.append(0)
 
         lq = max(0, sentence_size - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
+	q_rev = [0] + [word_idx[w] for w in query[::-1][:-1]] + [0] * lq	
 
         y = np.zeros(len(word_idx) + 1) # 0 is reserved for nil word
         for a in answer:
             y[word_idx[a]] = 1
 
         S.append(ss)
-        S_lens.append(ss_lens)
+        S_rev.append(ss_rev)
+	S_lens.append(ss_lens)
         Q.append(q)
+	Q_rev.append(q_rev)
         Q_lens.append(len(query))
         A.append(y)
-    return np.array(S), np.array(S_lens), np.array(Q), np.array(Q_lens), np.array(A)
+    return np.array(S), np.array(S_rev), np.array(S_lens), np.array(Q), np.array(Q_rev), np.array(Q_lens), np.array(A)
