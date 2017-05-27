@@ -172,7 +172,7 @@ with tf.Session() as sess:
     best_val_acc = 0.0
     num_worse = 0
     # Run encoder study experiments using trained model
-    for t in range(1, 500):
+    for t in range(1, 200):
         np.random.shuffle(order_batches)
         total_cost = 0.0
 
@@ -205,7 +205,7 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            if val_acc >= best_val_acc:
+            if val_acc > best_val_acc:
                 best_val_acc = val_acc 
                 num_worse = 0   
             else:
@@ -218,6 +218,6 @@ with tf.Session() as sess:
     test_acc = metrics.accuracy_score(test_preds, test_A_order[:, 1])
     print("Testing Accuracy:", test_acc)
     with open('results_ordertest/master_no_posenc/task_{}_ordertest.csv'.format(FLAGS.task_id), 'a') as csvfile:
-        csvfile.write('{}, {}, {}\n'.format(t, train_acc, val_acc, test_acc))
+        csvfile.write('{}, {}, {}, {}\n'.format(t, train_acc, val_acc, test_acc))
 
 
