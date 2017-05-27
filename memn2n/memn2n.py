@@ -499,9 +499,6 @@ class MemN2N(object):
             s_emb = tf.nn.embedding_lookup(self.C[-1], sentences) * self._order_encoding
             q_emb = tf.nn.embedding_lookup(self.C[-1], q_words)
 
-            import ipdb
-	    ipdb.set_trace()	    
-
             with tf.variable_scope('hop_2'):
                 pooled_outputs = []
 
@@ -538,7 +535,6 @@ class MemN2N(object):
                 #m_C = m_C_pooled # + self.TC[hopn]
 
             #c_temp = tf.transpose(m_C, [0, 2, 1])
-         
         sentence_w_order_words = tf.concat(1, [h_pool_flat, q_emb[:, 0], q_emb[:, 1]])
 
         with tf.variable_scope('order_scope'):
@@ -579,7 +575,7 @@ class MemN2N(object):
         """
         feed_dict = {self._order_sents: sentences, self._q_words: q_words, self._order_answers: answers}
         loss, _ = self._sess.run([self.order_loss_op, self.order_train_op], feed_dict=feed_dict)
-
+	return loss
 
     def predict(self, stories, queries):
         """Predicts answers as one-hot encoding.

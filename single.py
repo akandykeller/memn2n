@@ -182,10 +182,10 @@ with tf.Session() as sess:
         total_cost = 0.0
 
         for start, end in order_batches:
-            s = train_S_order[start:end]
-            q = train_Q_order[start:end]
-            a = train_A_order[start:end]
-            cost_t = model.order_batch_fit(s, q, a)
+            ss = train_S_order[start:end]
+            qq = train_Q_order[start:end]
+            aa = train_A_order[start:end]
+            cost_t = model.order_batch_fit(ss, qq, aa)
             total_cost += cost_t
 
 
@@ -210,7 +210,7 @@ with tf.Session() as sess:
             print('Validation Accuracy:', val_acc)
             print('-----------------------')
 
-            if val_acc >= best_val_acc:
+            if val_acc > best_val_acc:
                 best_val_acc = val_acc 
                 num_worse = 0   
             else:
