@@ -110,6 +110,7 @@ order_batches = [(start, end) for start, end in order_batches]
 with tf.Session() as sess:
     model = MemN2N(batch_size, vocab_size, sentence_size, memory_size, FLAGS.embedding_size, session=sess,
                    sentence_size_w_order=sentence_size_w_order, hops=FLAGS.hops, max_grad_norm=FLAGS.max_grad_norm)
+    best_val_acc = 0.0
     for t in range(1, FLAGS.epochs+1):
         # Stepped learning rate
         if t - 1 <= 200:
@@ -157,7 +158,14 @@ with tf.Session() as sess:
                                  'Validation Acc':val_acc,
                                  'Test Acc':-1})
 
+	    if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                num_worse = 0
+            else:
+                num_worse += 1
 
+            if num_worse >= 2 and t >= 20:
+                break 
 
     test_preds = model.predict(testS, testQ)
     test_acc = metrics.accuracy_score(test_preds, test_labels)
