@@ -1,9 +1,9 @@
 !#/bin/bash
-for iter in {1..1}
+for iter in {1..10}
 do
-    for ((lm_e=0; lm_e<=10; lm_e += 1))
+    for t in {1..20}
     do
-        echo "Beginning iter $iter, lm epochs $lm_e. training"
-        python single.py --task_id 1 --lm_epochs $lm_e
+        echo "Beginning iter $iter, task $t. training" 
+        python single.py --task_id $t --data_dir data/tasks_1-20_v1-2/en-10k/ 
     done 
 done
